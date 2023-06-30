@@ -1,0 +1,9 @@
+.vscode/
+build/
+data/
+
+*.bin
+*.db
+*.ncu-rep
+*.nsys-rep
+*.log
