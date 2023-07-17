@@ -57,7 +57,12 @@ __global__ void sgemm_kernel(float* __restrict__ A, float* __restrict__ B, float
 
 template<int M, int N, int K>
 void _launch_sgemm_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C) {
+  int constexpr BM = 128;  // tunable
+  int constexpr BN = 128;  // tunable
+  int constexpr BK = 8;
+  int constexpr TM = 8;
+  int constexpr TN = 8;
   dim3 constexpr blockSz(16, 16, 1);
-  dim3 constexpr gridSz((N+15)/16, (M+15)/16, 1);
+  dim3 constexpr gridSz((N+BN-1)/BN, (M+BM-1)/BM, 1);
   sgemm_kernel<M,N,K><<<gridSz, blockSz>>>(A, B, C);
 }
