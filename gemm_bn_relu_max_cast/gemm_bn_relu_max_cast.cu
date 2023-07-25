@@ -226,8 +226,8 @@ extern "C" __global__ void __launch_bounds__(128) tvmgen_default_fused_nn_dense_
   __shared__ half placeholder_shared[8192];
   __shared__ half placeholder_d_shared[1536];
   __shared__ half s_buffer[4*32*33*2];
-  // __shared__ half s_gamma[64];
-  // __shared__ half s_beta[64];
+  __shared__ half s_gamma[64];
+  __shared__ half s_beta[64];
   nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, 16, 16, 16, half, nvcuda::wmma::row_major> placeholder_shared_wmma_matrix_a[4];
   nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, 16, 16, 16, half, nvcuda::wmma::col_major> placeholder_d_shared_wmma_matrix_b[2];
   for (int i_c_outer_init = 0; i_c_outer_init < 4; ++i_c_outer_init) {
@@ -268,9 +268,9 @@ extern "C" __global__ void __launch_bounds__(128) tvmgen_default_fused_nn_dense_
   #pragma unroll
   for (int loopid = 0; loopid < 32; ++loopid) {
     *(float*)(s_buffer + tyz * 32 * 66 + loopid * 33 * 2 + tx * 2) = *(float*)(placeholder_shared + tyz * 32 * 64 + loopid * 32 * 2 + tx * 2);
-    // *(half2*)(s_gamma + loopid * 2) = *(half2*)(p_gamma + loopid * 2);
-    // *(half2*)(s_beta + loopid * 2) = *(half2*)(p_beta + loopid * 2);
   }
+  *(half2*)(s_gamma + tx * 2) = *(half2*)(p_gamma + tx * 2);
+  *(half2*)(s_beta + tx * 2) = *(half2*)(p_beta + tx * 2);
   __syncthreads();
 
   // BN RELU MAX REDUCE
@@ -280,8 +280,8 @@ extern "C" __global__ void __launch_bounds__(128) tvmgen_default_fused_nn_dense_
   #pragma unroll
   for (int loopid = 0; loopid < loopNum; ++loopid) {
     half2 r_val = *(half2*)(s_buffer + tyz * 32 * 66 + tx * 66 + loopid * 2);
-    half2 r_gamma = *(half2*)(p_gamma + loopid * 2);
-    half2 r_beta = *(half2*)(p_beta + loopid * 2);
+    half2 r_gamma = *(half2*)(s_gamma + loopid * 2);
+    half2 r_beta = *(half2*)(s_beta + loopid * 2);
     half2 r_vmax;
     float2 r_vmaxf;
 
