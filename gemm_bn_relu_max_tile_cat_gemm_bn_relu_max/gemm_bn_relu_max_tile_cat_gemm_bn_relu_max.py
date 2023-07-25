@@ -66,4 +66,7 @@ def test_gemm_bn_relu_max_tile_cat_gemm_bn_relu_max_numpy(MD, MR, K0, K1, N1, K2
 
 
 if __name__ == "__main__":
+    test_gemm_bn_relu_max_tile_cat_gemm_bn_relu_max_numpy(18000, 32, 10, 16, 32, 64, 64)
+    test_gemm_bn_relu_max_tile_cat_gemm_bn_relu_max_numpy(19000, 32, 10, 16, 32, 64, 64)
     test_gemm_bn_relu_max_tile_cat_gemm_bn_relu_max_numpy(20000, 32, 10, 16, 32, 64, 64)
+    test_gemm_bn_relu_max_tile_cat_gemm_bn_relu_max_numpy(21000, 32, 10, 16, 32, 64, 64)

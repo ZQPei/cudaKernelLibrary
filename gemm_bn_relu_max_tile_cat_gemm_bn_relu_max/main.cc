@@ -75,11 +75,11 @@ int main(int argc, char **argv) {
 
   // define fused_gemm_bn_relu_max_tile_cat_gemm_bn_relu_max
   auto fused_gemm_bn_relu_max_tile_cat_gemm_bn_relu_max = [&]() {
-    fused_reshape_cast_pad(inp.d_ptr, outPad.d_ptr, stream);
-    // fused_gemm1(outPad.d_ptr, w1.d_ptr, g1.d_ptr, b1.d_ptr, out_gemm1.d_ptr, stream);
-    fused_gemm_bn_relu_max_tile(outPad.d_ptr, w1.d_ptr, g1.d_ptr, b1.d_ptr, outGemm1.d_ptr, stream);
-    // fused_gemm2(outGemm1.d_ptr, w2.d_ptr, g2.d_ptr, b2.d_ptr, out_gemm2.d_ptr, stream);
-    fused_gemm_bn_relu_max(outGemm1.d_ptr, w2.d_ptr, g2.d_ptr, b2.d_ptr, outGemm2.d_ptr, stream);
+    fused_reshape_cast_pad(MD, inp.d_ptr, outPad.d_ptr, stream);
+    // fused_gemm1(MD, outPad.d_ptr, w1.d_ptr, g1.d_ptr, b1.d_ptr, out_gemm1.d_ptr, stream);
+    fused_gemm_bn_relu_max_tile(MD, outPad.d_ptr, w1.d_ptr, g1.d_ptr, b1.d_ptr, outGemm1.d_ptr, stream);
+    // fused_gemm2(MD, outGemm1.d_ptr, w2.d_ptr, g2.d_ptr, b2.d_ptr, out_gemm2.d_ptr, stream);
+    fused_gemm_bn_relu_max(MD, outGemm1.d_ptr, w2.d_ptr, g2.d_ptr, b2.d_ptr, outGemm2.d_ptr, stream);
 
     // cuAssert(cudaStreamSynchronize(stream));
     cuAssert(cudaGetLastError());

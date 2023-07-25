@@ -9,8 +9,8 @@ if [[ $platform == "x86_64" ]]; then
 elif [[ $platform == "aarch64" ]]; then
     sm="87"
 fi
-cmd="nvcc --use_fast_math --expt-relaxed-constexpr -std=c++14 -Xcompiler -fopenmp -O3 -lgflags -gencode arch=compute_${sm},code=sm_${sm}"
-# cmd="nvcc --use_fast_math --expt-relaxed-constexpr -std=c++14 -Xcompiler -fopenmp -O3 -lgflags -lineinfo -gencode arch=compute_${sm},code=sm_${sm}"
+# cmd="nvcc --use_fast_math --expt-relaxed-constexpr -std=c++14 -Xcompiler -fopenmp -O3 -lgflags -gencode arch=compute_${sm},code=sm_${sm}"
+cmd="nvcc --use_fast_math --expt-relaxed-constexpr -std=c++14 -Xcompiler -fopenmp -O3 -lgflags -lineinfo -gencode arch=compute_${sm},code=sm_${sm}"
 # cmd="nvcc --use_fast_math --expt-relaxed-constexpr -std=c++14 -Xcompiler -fopenmp -O3 -lgflags -maxrregcount 32 -lineinfo -gencode arch=compute_${sm},code=sm_${sm}"
 target_dir="./build"
 target_file="run.${platform}.sm_${sm}.out"
