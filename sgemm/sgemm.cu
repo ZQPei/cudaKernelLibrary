@@ -264,11 +264,11 @@ void _launch_sgemm_block_tile_kernel(float* __restrict__ A, float* __restrict__ 
 ////////////////////////////////////////////////////////////////////////
 void sgemm_cuda(float* __restrict__ dInput, float* __restrict__ dWeight, float* __restrict__ dInputTrans, float* __restrict__ dWeightTrans, float* __restrict__ dOutput, int M, int N, int K, cudaStream_t stream) {
   #define IF_STAT if (false)
-  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_naive_kernel<(m), (n), (k)>(dInput, dWeightTrans, dOutput, stream)
+  #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_naive_kernel<(m), (n), (k)>(dInput, dWeightTrans, dOutput, stream)
   // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_naive_vec_kernel<(m), (n), (k)>(dInput, dWeight, dOutput, stream)
   // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_2dindex_kernel<(m), (n), (k)>(dInput, dWeightTrans, dOutput, stream)
   // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_2dindex_vec_kernel<(m), (n), (k)>(dInput, dWeight, dOutput, stream)
-  #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_block_tile_kernel<(m), (n), (k)>(dInput, dWeightTrans, dOutput, stream)
+  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_block_tile_kernel<(m), (n), (k)>(dInput, dWeightTrans, dOutput, stream)
   #define ELSE_STAT else { std::cout << "NOT_IMPLEMENTED" << std::endl; __builtin_trap(); }
 
   IF_STAT;

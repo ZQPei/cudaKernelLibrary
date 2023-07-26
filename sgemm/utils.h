@@ -17,6 +17,7 @@
 #include <string>
 #include <type_traits>
 #include <unordered_set>
+#include <functional>
 
 
 bool time_profiler = true;
@@ -282,7 +283,6 @@ public:
     shape.clear();
     size = 1;
     for (auto _s: _shape) {
-      std::cout << _s << std::endl;
       size *= _s;
       shape.push_back(_s);
     }
@@ -364,3 +364,22 @@ public:
   size_t size;
   std::string data_path = "";
 };
+
+float testPerf(std::function<void()> kernel_func, cudaStream_t stream, int repeat = 1000, int warmup = 10) {
+  cudaEvent_t start, end;
+  cudaEventCreate(&start);
+  cudaEventCreate(&end);
+  for (int i = 0; i < warmup; ++i) {
+    kernel_func();
+  }
+  cudaEventRecord(start, stream);
+  for (int i = 0; i < repeat; ++i) {
+    kernel_func();
+  }
+  cudaEventRecord(end, stream);
+  cudaEventSynchronize(end);
+
+  float msec;
+  cudaEventElapsedTime(&msec, start, end);
+  return msec / repeat;
+}
