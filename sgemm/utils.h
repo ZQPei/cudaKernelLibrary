@@ -5,6 +5,7 @@
 #include <cuda_runtime.h>
 #include <nvToolsExt.h>
 #include <sys/time.h>
+#include <omp.h>
 
 #include <cassert>
 #include <cstdio>
@@ -12,6 +13,7 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <random>
 #include <string>
 #include <type_traits>
 #include <unordered_set>
@@ -177,15 +179,15 @@ void profilerSaveData(T *data, const size_t count, std::string save_name, bool i
 }
 
 template<typename T>
-bool compareValue(T *hOutput, T *hOutputRef, int M, int N);
+bool compareValue(T *hOutput, T *hOutputRef, size_t size, float const eps = 1e-3);
 
 template<>
-bool compareValue(float *hOutput, float *hOutputRef, int M, int N) {
-    const float eps = 0.001;
+bool compareValue(float *hOutput, float *hOutputRef, size_t size, float const eps) {
+    // const float eps = 0.001;
     bool result = true;
 
     #pragma omp parallel for reduction(&&:result)
-    for (int i = 0; i < M * N; i++) {
+    for (size_t i = 0; i < size; i++) {
         if (fabs(hOutput[i] - hOutputRef[i]) > eps) {
             result = false;
         }
@@ -194,12 +196,12 @@ bool compareValue(float *hOutput, float *hOutputRef, int M, int N) {
 }
 
 template<>
-bool compareValue(__half *hOutput, __half *hOutputRef, int M, int N) {
-    const float eps = 0.001;
+bool compareValue(__half *hOutput, __half *hOutputRef, size_t size, float const eps) {
+    // const float eps = 0.001;
     bool result = true;
 
     #pragma omp parallel for reduction(&&:result)
-    for (int i = 0; i < M * N; i++) {
+    for (size_t i = 0; i < size; i++) {
         if (fabs(__half2float(hOutput[i]) - __half2float(hOutputRef[i])) > eps) {
             result = false;
         }
@@ -245,3 +247,110 @@ inline std::string getTypeString<int>() { return "int32"; }
     _device_ptr_set.clear(); \
     cuAssert(cudaGetLastError()); \
   } while (0)
+
+template<typename T>
+class Tensor {
+public:
+  Tensor(size_t _size, std::string _data_path = ""):
+      size(_size) {
+    cudaMallocHost(&h_ptr, _size * sizeof(T));
+    cudaMalloc(&d_ptr, _size * sizeof(T));
+    cuAssert(cudaGetLastError());
+    if (_data_path.size()) load(_data_path);
+  }
+
+  Tensor(std::vector<size_t> _shape, std::string _data_path = ""):
+      shape(_shape) {
+    size = 1; for (auto _s: shape) size *= _s;
+    cudaMallocHost(&h_ptr, size * sizeof(T));
+    cudaMalloc(&d_ptr, size * sizeof(T));
+    cuAssert(cudaGetLastError());
+    if (_data_path.size()) load(_data_path);
+  }
+
+  // Tensor(std::vector<int> _shape, std::string _data_path = "") {
+  //   shape.clear();
+  //   size = 1;
+  //   for (auto _s: _shape) {
+  //     std::cout << _s << std::endl;
+  //     size *= _s;
+  //     shape.push_back(_s);
+  //   }
+  //   cudaMallocHost(&h_ptr, size * sizeof(T));
+  //   cudaMalloc(&d_ptr, size * sizeof(T));
+  //   cuAssert(cudaGetLastError());
+  //   if (_data_path.size()) load(_data_path);
+  // }
+
+  ~Tensor() {
+    cudaFreeHost(h_ptr);
+    cudaFree(d_ptr);
+  }
+
+  void load(std::string& _data_path) {
+    data_path = _data_path;
+    std::cout << "load data from " << data_path << std::endl;
+    profilerLoadData(h_ptr, size, data_path, false);
+    h2d();
+    cuAssert(cudaGetLastError());
+  }
+
+  void show() {
+    std::cout << "show data of size " << size << std::endl;
+    profilerShowData(h_ptr, size, data_path, false);
+  }
+
+  void fill_random() {
+    // fill with random value
+    std::mt19937 gen(0);
+    T _min, _max;
+
+    if (std::is_same<T, float>::value) {
+      _min = 0.0f, _max = 1.0f;
+    } else if (std::is_same<T, half>::value) {
+      _min = (half)0.0, _max = (half)1.0;
+    } else if (std::is_same<T, int>::value) {
+      _min = 0, _max = 99;
+    }
+    std::uniform_real_distribution<T> dist(_min, _max);
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+      h_ptr[i] = dist(gen);
+    }
+    h2d();
+  }
+
+  void fill_value(T val) {
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+      h_ptr[i] = (T)val;
+    }
+    h2d();
+  }
+
+  void fill_ones() {
+    fill_value((T)1.0);
+  }
+
+  void fill_zero() {
+    fill_value((T)0.0);
+  }
+
+  void h2d(cudaStream_t stream = cudaStreamDefault) {
+    cudaMemcpyAsync(d_ptr, h_ptr, size * sizeof(T), cudaMemcpyHostToDevice, stream);
+    cudaStreamSynchronize(stream);
+    cuAssert(cudaGetLastError());
+  }
+
+  void d2h(cudaStream_t stream = cudaStreamDefault) {
+    cudaMemcpyAsync(h_ptr, d_ptr, size * sizeof(T), cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+    cuAssert(cudaGetLastError());
+  }
+
+  T* h_ptr = nullptr;
+  T* d_ptr =nullptr;
+  std::vector<size_t> shape;
+  size_t size;
+  std::string data_path = "";
+};

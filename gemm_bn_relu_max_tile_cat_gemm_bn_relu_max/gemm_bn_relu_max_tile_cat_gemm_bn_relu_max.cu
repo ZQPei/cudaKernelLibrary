@@ -212,7 +212,13 @@ extern "C" __global__ void __launch_bounds__(256) fused_gemm_bn_relu_max_tile_v3
   nvcuda::wmma::fragment<nvcuda::wmma::accumulator, 16, 16, 16, half> T_dense_wmma_accumulator[1];
   __shared__ half placeholder_shared[8704];
   __shared__ half placeholder_d_shared[4352];
-  __shared__ half s_buffer[32*33*2];
+  // __shared__ half s_buffer[32*33*2];
+  // __shared__ half s_g[32];
+  // __shared__ half s_b[32];
+  // if (ty == 0 && tz == 0) {
+  //   *(half*)(s_g + tx) = *(half*)(g + tx);
+  //   *(half*)(s_b + tx) = *(half*)(b + tx);
+  // }
   nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, 16, 16, 16, half, nvcuda::wmma::row_major> placeholder_shared_wmma_matrix_a[1];
   nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, 16, 16, 16, half, nvcuda::wmma::col_major> placeholder_d_shared_wmma_matrix_b[1];
   nvcuda::wmma::fill_fragment(T_dense_wmma_accumulator[0], 0.000000000000000000000000000000000000000000000e+00f);
@@ -280,8 +286,8 @@ extern "C" __global__ void __launch_bounds__(256) fused_gemm_bn_relu_max_tile_v3
 
 void _launch_fused_gemm_bn_relu_max_tile_kernel(int MD, half* __restrict__ inp, half* __restrict__ w, half* __restrict__ g, half* __restrict__ b, half* __restrict__ outGemm, cudaStream_t stream) {
   // fused_gemm_bn_relu_max_tile_kernel<<<dim3(MD/2,1,1), dim3(32,4,2), 0, stream>>>(inp, w, g, b, outGemm);
-  fused_gemm_bn_relu_max_tile_v2_kernel<<<dim3(MD/2,1,1), dim3(32,4,2), 0, stream>>>(inp, w, g, b, outGemm);
-  // fused_gemm_bn_relu_max_tile_v3_kernel<<<dim3(MD/2,1,1), dim3(32,4,2), 0, stream>>>(inp, w, g, b, outGemm);
+  // fused_gemm_bn_relu_max_tile_v2_kernel<<<dim3(MD/2,1,1), dim3(32,4,2), 0, stream>>>(inp, w, g, b, outGemm);
+  fused_gemm_bn_relu_max_tile_v3_kernel<<<dim3(MD/2,1,1), dim3(32,4,2), 0, stream>>>(inp, w, g, b, outGemm);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -464,7 +470,13 @@ extern "C" __global__ void __launch_bounds__(256) fused_gemm_bn_relu_max_v3_kern
   nvcuda::wmma::fragment<nvcuda::wmma::accumulator, 32, 8, 16, half> T_dense_wmma_accumulator[2];
   __shared__ half placeholder_shared[2560];
   __shared__ half placeholder_d_shared[4608];
-  __shared__ half s_buffer[2*32*33*2];
+  // __shared__ half s_buffer[2*32*33*2];
+  // __shared__ half s_g[64];
+  // __shared__ half s_b[64];
+  // if (ty == 0 && tz == 0) {
+  //   *(half2*)(s_g + tx * 2) = *(half2*)(g + tx * 2);
+  //   *(half2*)(s_b + tx * 2) = *(half2*)(b + tx * 2);
+  // }
   nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, 32, 8, 16, half, nvcuda::wmma::row_major> placeholder_shared_wmma_matrix_a[1];
   nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, 32, 8, 16, half, nvcuda::wmma::col_major> placeholder_d_shared_wmma_matrix_b[2];
   for (int j_c_outer_init = 0; j_c_outer_init < 2; ++j_c_outer_init) {

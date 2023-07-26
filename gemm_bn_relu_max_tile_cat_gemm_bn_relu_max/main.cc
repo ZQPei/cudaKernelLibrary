@@ -1,5 +1,4 @@
 #include <iostream>
-#include <random>
 #include <cuda.h>
 #include <cuda_fp16.h>
 #include <gflags/gflags.h>

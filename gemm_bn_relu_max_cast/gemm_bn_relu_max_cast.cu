@@ -269,8 +269,10 @@ extern "C" __global__ void __launch_bounds__(128) tvmgen_default_fused_nn_dense_
   for (int loopid = 0; loopid < 32; ++loopid) {
     *(float*)(s_buffer + tyz * 32 * 66 + loopid * 33 * 2 + tx * 2) = *(float*)(placeholder_shared + tyz * 32 * 64 + loopid * 32 * 2 + tx * 2);
   }
-  *(half2*)(s_gamma + tx * 2) = *(half2*)(p_gamma + tx * 2);
-  *(half2*)(s_beta + tx * 2) = *(half2*)(p_beta + tx * 2);
+  if (tyz == 0) {
+    *(half2*)(s_gamma + tx * 2) = *(half2*)(p_gamma + tx * 2);
+    *(half2*)(s_beta + tx * 2) = *(half2*)(p_beta + tx * 2);
+  }
   __syncthreads();
 
   // BN RELU MAX REDUCE

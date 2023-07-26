@@ -5,7 +5,7 @@
 #include <gflags/gflags.h>
 #include <omp.h>
 
-#include "profiler.h"
+#include "utils.h"
 #include "sgemm.h"
 
 
@@ -39,32 +39,22 @@ int main(int argc, char **argv) {
   int N = FLAGS_N;
   int K = FLAGS_K;
 
-  CUDA_MALLOC_PTR(float, hOutput, M*N, false);
-  CUDA_MALLOC_PTR(float, hOutputRef, M*N, false);
-  CUDA_MALLOC_PTR(float, hWeight, N*K, false);
-  CUDA_MALLOC_PTR(float, hInput, M*K, false);
-  CUDA_MALLOC_PTR(float, dOutput, M*N, true);
-  CUDA_MALLOC_PTR(float, dOutputRef, M*N, true);
-  CUDA_MALLOC_PTR(float, dWeight, N*K, true);
-  CUDA_MALLOC_PTR(float, dWeightTrans, N*K, true);
-  CUDA_MALLOC_PTR(float, dInput, M*K, true);
-  CUDA_MALLOC_PTR(float, dInputTrans, M*K, true);
-  cudaStream_t stream;
+  std::string _postfix = std::to_string(M) + "_" + std::to_string(N) + "_" + std::to_string(K) + "_" + 
+                         getTypeString<float>() + "_" + getTypeString<float>() + ".bin";
+
+  // alloc data
+  Tensor<float> A(M*K, std::string("./data/A_") + _postfix);
+  Tensor<float> B(K*N, std::string("./data/B_") + _postfix);
+  Tensor<float> AT(M*K, std::string("./data/AT_") + _postfix);
+  Tensor<float> BT(N*K, std::string("./data/BT_") + _postfix);
+  Tensor<float> C(M*N, std::string("./data/C_") + _postfix);
 
   // init
-  if (FLAGS_verbose) std::cout << "init ..." << std::endl;
+  cudaStream_t stream;
   cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
-  std::string _postfix = std::to_string(M) + "_" + std::to_string(N) + "_" + std::to_string(K) + "_" + getTypeString<float>() + "_" + getTypeString<float>() + ".bin";
-  profilerLoadData(dInput, M * K, std::string("./data/A_") + _postfix, true);
-  profilerLoadData(dInputTrans, M * K, std::string("./data/AT_") + _postfix, true);
-  profilerLoadData(dWeight, N * K, std::string("./data/B_") + _postfix, true);
-  profilerLoadData(dWeightTrans, N * K, std::string("./data/BT_") + _postfix, true);
-  profilerLoadData(hInput, M * K, std::string("./data/A_") + _postfix, false);
-  profilerLoadData(hWeight, N * K, std::string("./data/B_") + _postfix, false);
-  // cudaMemcpy(hInput, dInput, sizeof(float) * M * K, cudaMemcpyDeviceToHost);
-  // cudaMemcpy(hWeight, dWeight, sizeof(half) * N * K, cudaMemcpyDeviceToHost);
-  if (FLAGS_verbose) profilerShowData(dInput, M * K, std::string("./data/A_") + _postfix, true);
-  if (FLAGS_verbose) profilerShowData(dWeight, N * K, std::string("./data/B_") + _postfix, true);
+  if (FLAGS_verbose) std::cout << "init ..." << std::endl;
+  if (FLAGS_verbose) profilerShowData(A, M * K, std::string("./data/A_") + _postfix, true);
+  if (FLAGS_verbose) profilerShowData(B, N * K, std::string("./data/B_") + _postfix, true);
   cuAssert(cudaGetLastError());
 
   // cpu version as ref
@@ -114,6 +104,5 @@ int main(int argc, char **argv) {
   // free
   if (FLAGS_verbose) std::cout << "free ..." << std::endl;
   cuAssert(cudaGetLastError());
-  CUDA_FREE_PTR();
   return 0;
 }
