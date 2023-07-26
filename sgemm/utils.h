@@ -179,10 +179,10 @@ void profilerSaveData(T *data, const size_t count, std::string save_name, bool i
 }
 
 template<typename T>
-bool compareValue(T *hOutput, T *hOutputRef, size_t size, float const eps = 1e-3);
+bool compareValue(T *hOutput, T *hOutputRef, size_t size, float const eps = 1e-3, bool verbose = false);
 
 template<>
-bool compareValue(float *hOutput, float *hOutputRef, size_t size, float const eps) {
+bool compareValue(float *hOutput, float *hOutputRef, size_t size, float const eps, bool verbose) {
     // const float eps = 0.001;
     bool result = true;
 
@@ -192,11 +192,16 @@ bool compareValue(float *hOutput, float *hOutputRef, size_t size, float const ep
             result = false;
         }
     }
+
+    if (verbose) {
+      if (result) std::cout << "check pass ..." << std::endl;
+      else std::cout << "check failed ..." << std::endl;
+    }
     return result;
 }
 
 template<>
-bool compareValue(__half *hOutput, __half *hOutputRef, size_t size, float const eps) {
+bool compareValue(__half *hOutput, __half *hOutputRef, size_t size, float const eps, bool verbose) {
     // const float eps = 0.001;
     bool result = true;
 
@@ -205,6 +210,11 @@ bool compareValue(__half *hOutput, __half *hOutputRef, size_t size, float const 
         if (fabs(__half2float(hOutput[i]) - __half2float(hOutputRef[i])) > eps) {
             result = false;
         }
+    }
+
+    if (verbose) {
+      if (result) std::cout << "check pass ..." << std::endl;
+      else std::cout << "check failed ..." << std::endl;
     }
     return result;
 }
@@ -259,28 +269,28 @@ public:
     if (_data_path.size()) load(_data_path);
   }
 
-  Tensor(std::vector<size_t> _shape, std::string _data_path = ""):
-      shape(_shape) {
-    size = 1; for (auto _s: shape) size *= _s;
-    cudaMallocHost(&h_ptr, size * sizeof(T));
-    cudaMalloc(&d_ptr, size * sizeof(T));
-    cuAssert(cudaGetLastError());
-    if (_data_path.size()) load(_data_path);
-  }
-
-  // Tensor(std::vector<int> _shape, std::string _data_path = "") {
-  //   shape.clear();
-  //   size = 1;
-  //   for (auto _s: _shape) {
-  //     std::cout << _s << std::endl;
-  //     size *= _s;
-  //     shape.push_back(_s);
-  //   }
+  // Tensor(std::vector<size_t> _shape, std::string _data_path = ""):
+  //     shape(_shape) {
+  //   size = 1; for (auto _s: shape) size *= _s;
   //   cudaMallocHost(&h_ptr, size * sizeof(T));
   //   cudaMalloc(&d_ptr, size * sizeof(T));
   //   cuAssert(cudaGetLastError());
   //   if (_data_path.size()) load(_data_path);
   // }
+
+  Tensor(std::vector<int> _shape, std::string _data_path = "") {
+    shape.clear();
+    size = 1;
+    for (auto _s: _shape) {
+      std::cout << _s << std::endl;
+      size *= _s;
+      shape.push_back(_s);
+    }
+    cudaMallocHost(&h_ptr, size * sizeof(T));
+    cudaMalloc(&d_ptr, size * sizeof(T));
+    cuAssert(cudaGetLastError());
+    if (_data_path.size()) load(_data_path);
+  }
 
   ~Tensor() {
     cudaFreeHost(h_ptr);

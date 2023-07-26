@@ -43,29 +43,33 @@ int main(int argc, char **argv) {
                          getTypeString<float>() + "_" + getTypeString<float>() + ".bin";
 
   // alloc data
-  Tensor<float> A(M*K, std::string("./data/A_") + _postfix);
-  Tensor<float> B(K*N, std::string("./data/B_") + _postfix);
-  Tensor<float> AT(M*K, std::string("./data/AT_") + _postfix);
-  Tensor<float> BT(N*K, std::string("./data/BT_") + _postfix);
-  Tensor<float> C(M*N, std::string("./data/C_") + _postfix);
+  Tensor<float> A({M, K}, std::string("./data/A_") + _postfix);
+  Tensor<float> B({K, N}, std::string("./data/B_") + _postfix);
+  Tensor<float> AT({M, K}, std::string("./data/AT_") + _postfix);
+  Tensor<float> BT({N, K}, std::string("./data/BT_") + _postfix);
+  Tensor<float> CRef({M, N}, std::string("./data/C_Ref") + _postfix);
+  Tensor<float> C({M, N});
 
   // init
   cudaStream_t stream;
   cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
   if (FLAGS_verbose) std::cout << "init ..." << std::endl;
-  if (FLAGS_verbose) profilerShowData(A, M * K, std::string("./data/A_") + _postfix, true);
-  if (FLAGS_verbose) profilerShowData(B, N * K, std::string("./data/B_") + _postfix, true);
+  if (FLAGS_verbose) profilerShowData(A.d_ptr, M * K, std::string("./data/A_") + _postfix, true);
+  if (FLAGS_verbose) profilerShowData(B.d_ptr, N * K, std::string("./data/B_") + _postfix, true);
   cuAssert(cudaGetLastError());
 
-  // cpu version as ref
-  if (FLAGS_verbose) std::cout << "start sgemm on cpu as reference ..." << std::endl;
-  profilerLoadData(hOutputRef, M * N, std::string("./data/C_ref_") + _postfix, false);
+  // get reference
+  if (FLAGS_verbose) std::cout << "get reference ..." << std::endl;
 
-  // cuda version
-  if (FLAGS_verbose) std::cout << "start sgemm on gpu as comparison ..." << std::endl;
+  // run kernel
+  if (FLAGS_verbose) std::cout << "get comparison ..." << std::endl;
   cuAssert(cudaGetLastError());
-  sgemm_cuda(dInput, dWeight, dInputTrans, dWeightTrans, dOutput, M, N, K, stream);
-  cudaStreamSynchronize(stream);
+  auto run_sgemm_cuda = [&]() {
+    sgemm_cuda(A.d_ptr, B.d_ptr, AT.d_ptr, BT.d_ptr, C.d_ptr, M, N, K, stream);
+    // cudaStreamSynchronize(stream);
+  };
+
+  run_sgemm_cuda();
 
   // compare output
   if (FLAGS_doRefCheck) {
@@ -83,23 +87,23 @@ int main(int argc, char **argv) {
     else std::cout << "check failed ..." << std::endl;
   }
 
-  // time profile
-  if (FLAGS_doProfile) {
-    cudaStreamSynchronize(stream);
-    PROFILER_TIMER_START(sgemm, stream);
-    for (int _ = 0; _ < FLAGS_runNum; ++_) {
-      sgemm_cuda(dInput, dWeight, dInputTrans, dWeightTrans, dOutput, M, N, K, stream);
-    }
-    cudaStreamSynchronize(stream);
-    PROFILER_TIMER_STOP(sgemm, stream);
-    float _elapsed_time_us = PROFILER_TIMER_RESULT(sgemm);
-    if (FLAGS_verbose) std::cout << " us" << std::endl;
-    if (FLAGS_verbose) {
-      float flops = 2 * long(M) * N * K;
-      float GFLOPS = float(flops) / 1024/1024/1024/(_elapsed_time_us/1e6);
-      std::cout << "GFLOPS: " << GFLOPS << std::endl;
-    }
-  }
+  // // time profile
+  // if (FLAGS_doProfile) {
+  //   cudaStreamSynchronize(stream);
+  //   PROFILER_TIMER_START(sgemm, stream);
+  //   for (int _ = 0; _ < FLAGS_runNum; ++_) {
+  //     sgemm_cuda(dInput, dWeight, dInputTrans, dWeightTrans, dOutput, M, N, K, stream);
+  //   }
+  //   cudaStreamSynchronize(stream);
+  //   PROFILER_TIMER_STOP(sgemm, stream);
+  //   float _elapsed_time_us = PROFILER_TIMER_RESULT(sgemm);
+  //   if (FLAGS_verbose) std::cout << " us" << std::endl;
+  //   if (FLAGS_verbose) {
+  //     float flops = 2 * long(M) * N * K;
+  //     float GFLOPS = float(flops) / 1024/1024/1024/(_elapsed_time_us/1e6);
+  //     std::cout << "GFLOPS: " << GFLOPS << std::endl;
+  //   }
+  // }
 
   // free
   if (FLAGS_verbose) std::cout << "free ..." << std::endl;
