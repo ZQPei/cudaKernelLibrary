@@ -365,16 +365,16 @@ public:
   std::string data_path = "";
 };
 
-float testPerf(std::function<void()> kernel_func, cudaStream_t stream, int repeat = 1000, int warmup = 10) {
+float testPerf(std::function<void()> test_func, cudaStream_t stream, int repeat = 1000, int warmup = 10) {
   cudaEvent_t start, end;
   cudaEventCreate(&start);
   cudaEventCreate(&end);
   for (int i = 0; i < warmup; ++i) {
-    kernel_func();
+    test_func();
   }
   cudaEventRecord(start, stream);
   for (int i = 0; i < repeat; ++i) {
-    kernel_func();
+    test_func();
   }
   cudaEventRecord(end, stream);
   cudaEventSynchronize(end);

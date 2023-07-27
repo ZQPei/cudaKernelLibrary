@@ -5,11 +5,11 @@ import numpy as np
 
 def init(M, N, K):
     A = np.random.rand(M, K) - 0.5
-    B = np.random.rand(N, K) - 0.5
+    B = np.random.rand(K, N) - 0.5
     return A, B
 
 def sgemm_numpy(A, B):
-    C = np.matmul(A, B.transpose(1,0))
+    C = np.matmul(A, B)
     return C
 
 def test_batch_norm_relu_max(M, N, K, in_type, out_type):

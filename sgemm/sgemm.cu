@@ -11,13 +11,19 @@ __host__ __device__ __inline__ int constexpr getBits() {
   }
 }
 
+#define tx threadIdx.x
+#define ty threadIdx.y
+#define tz threadIdx.z
+#define bx blockIdx.x
+#define by blockIdx.y
+#define bz blockIdx.z
 #define OFFSET(row, col, stride) (((row) << (getBits<(stride)>())) + (col))
 #define FLOAT4(pointer) (reinterpret_cast<float4*>(&(pointer))[0])
 
 ////////////////////////////////////////////////////////////////////////
 // 1. naive
 // A: row_major [M, K]
-// B: col_major [N, K]
+// B: row_major [K, N]
 // C: row_major [M, N]
 template<int M, int N, int K>
 __global__ void sgemm_naive_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C) {
@@ -94,7 +100,7 @@ void _launch_sgemm_naive_vec_kernel(float* __restrict__ A, float* __restrict__ B
 ////////////////////////////////////////////////////////////////////////
 // 3. 2d index
 // A: row_major [M, K]
-// B: col_major [N, K]
+// B: row_major [K, N]
 // C: row_major [M, N]
 template<int M, int N, int K>
 __global__ void sgemm_2dindex_kernel(float* __restrict__ a, float* __restrict__ b, float* __restrict__ c) {
@@ -107,8 +113,8 @@ __global__ void sgemm_2dindex_kernel(float* __restrict__ a, float* __restrict__ 
     float psum = 0.0;
     #pragma unroll
     for (int k = 0; k < K; k++) {
-        // psum += a[OFFSET(m, k, K)] * b[OFFSET(k, n, N)];
-        psum += a[OFFSET(k, m, M)] * b[OFFSET(k, n, N)];
+        psum += a[OFFSET(m, k, K)] * b[OFFSET(n, k, K)];
+        // psum += a[OFFSET(k, m, M)] * b[OFFSET(k, n, N)];
     }
     c[OFFSET(m, n, N)] = psum;
   }
@@ -183,65 +189,41 @@ __global__ void sgemm_block_tile_kernel(float* __restrict__ A, float* __restrict
   int constexpr TN = 8;  // tunable
 
   dim3 constexpr blockSz(BN/TN, BM/TM);
-  dim3 constexpr gridSz((N+BN-1)/BN, (M+BM-1)/BM);
+  dim3 constexpr gridSz((N+BN-1)/BN, (M+BM-1)/BM); (void)gridSz;
 
+  __shared__ float s_a[BM*BK];
+  __shared__ float s_b[BK*BN];
+  float r_c[TM*TN] = {0.0,};
 
-  __shared__ float s_a[BM][BK];
-  __shared__ float s_b[BK][BN];
-  float r_c[TM][TN] = {0.0f,};
-
-  int by = blockIdx.y;
-  int bx = blockIdx.x;
-  int ty = threadIdx.y;
-  int tx = threadIdx.x;
-  int tid = threadIdx.y * blockDim.x + threadIdx.x;
-
-  int ld_a_smem_m = tid >> 1;
-  int ld_a_smem_k = (tid & 1) << 2;
-  int ld_b_smem_k = tid >> 5;
-  int ld_b_smem_n = (tid & 31) << 2;
-
-  int ld_a_gmem_m = by * BM + ld_a_smem_m;
-  int ld_b_gmem_n = bx * BN + ld_b_smem_n;
+  int const tid = (ty * blockSz.x) + tx;
 
   #pragma unroll
   for (int bk = 0; bk < (K+BK-1)/BK; ++bk) {
-    // LDG STS
-    int ld_a_gmem_k = bk * BK + ld_a_smem_k;
-    int ld_a_gmem_addr = OFFSET(ld_a_gmem_m, ld_a_gmem_k, K);
-    FLOAT4(s_a[ld_a_smem_m][ld_a_smem_k]) = FLOAT4(A[ld_a_gmem_addr]);
-    int ld_b_gmem_k = bk * BK + ld_b_smem_k;
-    int ld_b_gmem_addr = OFFSET(ld_b_gmem_k, ld_b_gmem_n, N);
-    FLOAT4(s_b[ld_b_smem_k][ld_b_smem_n]) = FLOAT4(B[ld_b_gmem_addr]);
-
+    // ldg, sts
+    *(float4*)(s_a + (tid >> 1) * BK + (tid & 1) * 4) = *(float4*)(A + by * BM * K + (tid >> 1) * K + bk * BK + (tid & 1) * 4);
+    *(float4*)(s_b + (tid >> 5) * BN + (tid & 31) * 4) = *(float4*)(B + bk * BK * N + (tid >> 5) * N + bx * BN + (tid & 31) * 4);
     __syncthreads();
 
-    // do gemm each thread to r_c
+    // mma
     #pragma unroll
-    for (int k = 0; k < BK; ++k) {
+    for (int m = 0; m < TM; ++m) {
       #pragma unroll
-      for (int m = 0; m < TM; ++m) {
+      for (int n = 0; n < TN; ++n) {
         #pragma unroll
-        for (int n = 0; n < TN; ++n) {
-          int mma_a_smem_m = ty * TM + m;
-          int mma_b_smem_n = tx * TN + n;
-          r_c[m][n] += s_a[mma_a_smem_m][k] * s_b[k][mma_b_smem_n];
+        for (int k = 0; k < BK; ++k) {
+          *(float*)(r_c + m * TN + n) += (*(float*)(s_a + ty * TM * BK + m * BK + k)) * (*(float*)(s_b + k * BN + tx * TN + n));
         }
       }
     }
-
     __syncthreads();
   }
 
-  // LDS STG
+  // stg
   #pragma unroll
-  for (int i = 0; i < TM; ++i) {
-    int st_c_gmem_m = by * BM + ty * TM + i;
+  for (int m = 0; m < TM; ++m) {
     #pragma unroll
-    for (int j = 0; j < TN; ++j) {
-      int st_c_gmem_n = bx * BN + tx * TN + j;
-      int st_c_gmem_addr = OFFSET(st_c_gmem_m, st_c_gmem_n, N);
-      FLOAT4(C[st_c_gmem_addr]) = FLOAT4(r_c[i][j]) ;
+    for (int vec_n = 0; vec_n < TN/4; ++vec_n) {
+      *(float4*)(C + by * BM * N + ty * TM * N + m * N + bx * BN + tx * TN + vec_n * 4) = *(float4*)(r_c + m * TN + vec_n * 4);
     }
   }
 }
@@ -249,11 +231,11 @@ __global__ void sgemm_block_tile_kernel(float* __restrict__ A, float* __restrict
 template<int M, int N, int K>
 void _launch_sgemm_block_tile_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, cudaStream_t stream) {
   static_assert((M&31) == 0 && (N&31) == 0 && (K&31) == 0, "M, N, K should be divisible by 32");
-  int constexpr BM = 128;
-  int constexpr BN = 128;
-  int constexpr BK = 8;
-  int constexpr TM = 8;
-  int constexpr TN = 8;
+  int constexpr BM = 128; (void)BM;
+  int constexpr BN = 128; (void)BN;
+  int constexpr BK = 8; (void)BK;
+  int constexpr TM = 8; (void)TM;
+  int constexpr TN = 8; (void)TN;
 
   dim3 constexpr blockSz(BN/TN, BM/TM);
   dim3 constexpr gridSz((N+BN-1)/BN, (M+BM-1)/BM);
@@ -262,13 +244,177 @@ void _launch_sgemm_block_tile_kernel(float* __restrict__ A, float* __restrict__ 
 
 
 ////////////////////////////////////////////////////////////////////////
-void sgemm_cuda(float* __restrict__ dInput, float* __restrict__ dWeight, float* __restrict__ dInputTrans, float* __restrict__ dWeightTrans, float* __restrict__ dOutput, int M, int N, int K, cudaStream_t stream) {
+// 6. block level tile, low bank conflict
+// A: row_major [M, K]
+// B: row_major [K, N]
+// C: row_major [M, N]
+template<int M, int N, int K>
+__global__ void sgemm_block_tile_bank_conflict_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C) {
+  int constexpr BM = 128;  // tunable
+  int constexpr BN = 128;  // tunable
+  int constexpr BK = 8;
+  int constexpr TM = 8;  // tunable
+  int constexpr TN = 8;  // tunable
+
+  dim3 constexpr blockSz(BN/TN, BM/TM);
+  dim3 constexpr gridSz((N+BN-1)/BN, (M+BM-1)/BM); (void)gridSz;
+
+  __shared__ float s_a[BK*BM];
+  __shared__ float s_b[BK*BN];
+  float r_c[TM*TN] = {0.0,};
+  float r_a[TM];
+  float r_b[TN];
+
+  int const tid = (ty * blockSz.x) + tx;
+
+  #pragma unroll
+  for (int bk = 0; bk < (K+BK-1)/BK; ++bk) {
+    // ldg, sts
+    #pragma unroll
+    for (int loopid = 0; loopid < 4; ++loopid) {
+      float4 val = *(float4*)(A + by * BM * K + (tid >> 1) * K + bk * BK + (tid & 1) * 4);
+      *(float*)(s_a + (tid & 1) * 4 * BM + loopid * BM + (tid >> 1)) = *((float*)&val + loopid);
+    }
+    *(float4*)(s_b + (tid >> 5) * BN + (tid & 31) * 4) = *(float4*)(B + bk * BK * N + (tid >> 5) * N + bx * BN + (tid & 31) * 4);
+    __syncthreads();
+
+    // mma
+    #pragma unroll
+    for (int k = 0; k < BK; ++k) {
+      *(float4*)(r_a + 0) = *(float4*)(s_a + k * BM + 0 * 16 * 4 + ty * 4);
+      *(float4*)(r_a + 4) = *(float4*)(s_a + k * BM + 1 * 16 * 4 + ty * 4);
+      *(float4*)(r_b + 0) = *(float4*)(s_b + k * BN + 0 * 16 * 4 + tx * 4);
+      *(float4*)(r_b + 4) = *(float4*)(s_b + k * BN + 1 * 16 * 4 + tx * 4);
+      #pragma unroll
+      for (int m = 0; m < TM; ++m) {
+        #pragma unroll
+        for (int n = 0; n < TN; ++n) {
+          *(float*)(r_c + m * TN + n) += (*(float*)(r_a + m)) * (*(float*)(r_b + n));
+        }
+      }
+    }
+    __syncthreads();
+  }
+
+  // stg
+  #pragma unroll
+  for (int i = 0; i < 2; ++i) {
+    #pragma unroll
+    for (int m = 0; m < TM/2; ++m) {
+      #pragma unroll
+      for (int j = 0; j < 2; ++j) {
+        *(float4*)(C + by * BM * N + i * (BM>>1) * N + ty * (TM>>1) * N + m * N + bx * BN + j * (BN>>1) + tx * 4) = *(float4*)(r_c + i * 32 + m * 8 + j * 4);
+      }
+    }
+  }
+}
+
+template<int M, int N, int K>
+void _launch_sgemm_block_tile_bank_conflict_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, cudaStream_t stream) {
+  static_assert((M&31) == 0 && (N&31) == 0 && (K&31) == 0, "M, N, K should be divisible by 32");
+  int constexpr BM = 128; (void)BM;
+  int constexpr BN = 128; (void)BN;
+  int constexpr BK = 8; (void)BK;
+  int constexpr TM = 8; (void)TM;
+  int constexpr TN = 8; (void)TN;
+
+  dim3 constexpr blockSz(BN/TN, BM/TM);
+  dim3 constexpr gridSz((N+BN-1)/BN, (M+BM-1)/BM);
+  sgemm_block_tile_bank_conflict_kernel<M, N, K><<<gridSz, blockSz, 0, stream>>>(A, B, C);
+}
+
+
+////////////////////////////////////////////////////////////////////////
+// 7. block level tile, low bank conflict, double buffer
+// A: row_major [M, K]
+// B: row_major [K, N]
+// C: row_major [M, N]
+template<int M, int N, int K>
+__global__ void sgemm_double_buffer_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C) {
+  int constexpr BM = 128;  // tunable
+  int constexpr BN = 128;  // tunable
+  int constexpr BK = 8;
+  int constexpr TM = 8;  // tunable
+  int constexpr TN = 8;  // tunable
+
+  dim3 constexpr blockSz(BN/TN, BM/TM);
+  dim3 constexpr gridSz((N+BN-1)/BN, (M+BM-1)/BM); (void)gridSz;
+
+  __shared__ float s_a[BK*BM];
+  __shared__ float s_b[BK*BN];
+  float r_c[TM*TN] = {0.0,};
+  float r_a[TM];
+  float r_b[TN];
+
+  int const tid = (ty * blockSz.x) + tx;
+
+  #pragma unroll
+  for (int bk = 0; bk < (K+BK-1)/BK; ++bk) {
+    // ldg, sts
+    #pragma unroll
+    for (int loopid = 0; loopid < 4; ++loopid) {
+      float4 val = *(float4*)(A + by * BM * K + (tid >> 1) * K + bk * BK + (tid & 1) * 4);
+      *(float*)(s_a + (tid & 1) * 4 * BM + loopid * BM + (tid >> 1)) = *((float*)&val + loopid);
+    }
+    *(float4*)(s_b + (tid >> 5) * BN + (tid & 31) * 4) = *(float4*)(B + bk * BK * N + (tid >> 5) * N + bx * BN + (tid & 31) * 4);
+    __syncthreads();
+
+    // mma
+    #pragma unroll
+    for (int k = 0; k < BK; ++k) {
+      *(float4*)(r_a + 0) = *(float4*)(s_a + k * BM + 0 * 16 * 4 + ty * 4);
+      *(float4*)(r_a + 4) = *(float4*)(s_a + k * BM + 1 * 16 * 4 + ty * 4);
+      *(float4*)(r_b + 0) = *(float4*)(s_b + k * BN + 0 * 16 * 4 + tx * 4);
+      *(float4*)(r_b + 4) = *(float4*)(s_b + k * BN + 1 * 16 * 4 + tx * 4);
+      #pragma unroll
+      for (int m = 0; m < TM; ++m) {
+        #pragma unroll
+        for (int n = 0; n < TN; ++n) {
+          *(float*)(r_c + m * TN + n) += (*(float*)(r_a + m)) * (*(float*)(r_b + n));
+        }
+      }
+    }
+    __syncthreads();
+  }
+
+  // stg
+  #pragma unroll
+  for (int i = 0; i < 2; ++i) {
+    #pragma unroll
+    for (int m = 0; m < TM/2; ++m) {
+      #pragma unroll
+      for (int j = 0; j < 2; ++j) {
+        *(float4*)(C + by * BM * N + i * (BM>>1) * N + ty * (TM>>1) * N + m * N + bx * BN + j * (BN>>1) + tx * 4) = *(float4*)(r_c + i * 32 + m * 8 + j * 4);
+      }
+    }
+  }
+}
+
+template<int M, int N, int K>
+void _launch_sgemm_double_buffer_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, cudaStream_t stream) {
+  static_assert((M&31) == 0 && (N&31) == 0 && (K&31) == 0, "M, N, K should be divisible by 32");
+  int constexpr BM = 128; (void)BM;
+  int constexpr BN = 128; (void)BN;
+  int constexpr BK = 8; (void)BK;
+  int constexpr TM = 8; (void)TM;
+  int constexpr TN = 8; (void)TN;
+
+  dim3 constexpr blockSz(BN/TN, BM/TM);
+  dim3 constexpr gridSz((N+BN-1)/BN, (M+BM-1)/BM);
+  sgemm_double_buffer_kernel<M, N, K><<<gridSz, blockSz, 0, stream>>>(A, B, C);
+}
+
+
+////////////////////////////////////////////////////////////////////////
+void sgemm_cuda(float* __restrict__ A, float* __restrict__ B, float* __restrict__ AT, float* __restrict__ BT, float* __restrict__ C, int M, int N, int K, cudaStream_t stream) {
   #define IF_STAT if (false)
-  #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_naive_kernel<(m), (n), (k)>(dInput, dWeightTrans, dOutput, stream)
-  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_naive_vec_kernel<(m), (n), (k)>(dInput, dWeight, dOutput, stream)
-  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_2dindex_kernel<(m), (n), (k)>(dInput, dWeightTrans, dOutput, stream)
-  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_2dindex_vec_kernel<(m), (n), (k)>(dInput, dWeight, dOutput, stream)
-  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_block_tile_kernel<(m), (n), (k)>(dInput, dWeightTrans, dOutput, stream)
+  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_naive_kernel<(m), (n), (k)>(A, B, C, stream)
+  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_naive_vec_kernel<(m), (n), (k)>(A, BT, C, stream)
+  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_2dindex_kernel<(m), (n), (k)>(A, BT, C, stream)
+  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_2dindex_vec_kernel<(m), (n), (k)>(A, BT, C, stream)
+  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_block_tile_kernel<(m), (n), (k)>(A, B, C, stream)
+  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_block_tile_bank_conflict_kernel<(m), (n), (k)>(A, B, C, stream)
+  #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_double_buffer_kernel<(m), (n), (k)>(A, B, C, stream)
   #define ELSE_STAT else { std::cout << "NOT_IMPLEMENTED" << std::endl; __builtin_trap(); }
 
   IF_STAT;

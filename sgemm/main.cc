@@ -59,24 +59,22 @@ int main(int argc, char **argv) {
   if (FLAGS_verbose) profilerShowData(B.d_ptr, N * K, std::string("./data/B_") + _postfix, true);
   cuAssert(cudaGetLastError());
 
-  // get reference
-  if (FLAGS_verbose) std::cout << "get reference ..." << std::endl;
-
-  // run kernel
-  if (FLAGS_verbose) std::cout << "get comparison ..." << std::endl;
+  // run
+  if (FLAGS_verbose) std::cout << "run ..." << std::endl;
   cuAssert(cudaGetLastError());
-  auto run_sgemm_cuda = [&]() {
+  auto test_func = [&]() {
     sgemm_cuda(A.d_ptr, B.d_ptr, AT.d_ptr, BT.d_ptr, C.d_ptr, M, N, K, stream);
     // cudaStreamSynchronize(stream);
     // sleep(0.01);
   };
 
-  run_sgemm_cuda();
+  test_func();
+  cudaStreamSynchronize(stream);
   cuAssert(cudaGetLastError());
 
   // compare output
   if (FLAGS_doRefCheck) {
-    if (FLAGS_verbose) std::cout << "compare output between cpu and gpu ..." << std::endl;
+    if (FLAGS_verbose) std::cout << "compare output with reference ..." << std::endl;
     C.d2h();
     CRef.show();
     C.show();
@@ -85,8 +83,13 @@ int main(int argc, char **argv) {
 
   // time profile
   if (FLAGS_doProfile) {
+    if (FLAGS_verbose) std::cout << "test performance ..." << std::endl;
     cudaStreamSynchronize(stream);
-    std::cout << testPerf(run_sgemm_cuda, stream) << "ms" << std::endl;
+    float ms = testPerf(test_func, stream);
+    std::cout << "PERF: " << ms << " ms" << std::endl;
+    float flops = 2 * long(M) * N * K;
+    float GFLOPS = float(flops) / 1024/1024/1024/(ms/1e3);
+    std::cout << "GFLOPS: " << GFLOPS << std::endl;
   }
 
   // free
