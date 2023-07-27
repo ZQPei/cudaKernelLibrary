@@ -1,4 +1,5 @@
 #include <cuda.h>
+#include <cublas_v2.h>
 #include <iostream>
 
 template<int X>
@@ -46,7 +47,7 @@ __global__ void sgemm_naive_kernel(float* __restrict__ A, float* __restrict__ B,
 
 template<int M, int N, int K>
 void _launch_sgemm_naive_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, cudaStream_t stream) {
-  static_assert((M&31) == 0 && (N&31) == 0 && (K&31) == 0, "M, N, K should be divisible by 32");
+  static_assert((M&31) == 0 && (N&31) == 0 && (K&8) == 0, "M, N, K should be divisible by 32");
   int constexpr blockSz = 128;
   int constexpr gridSz = (M*N + blockSz - 1) / blockSz;
   int constexpr nbits = getBits<N>();
@@ -91,7 +92,7 @@ __global__ void sgemm_naive_vec_kernel(float* __restrict__ A, float* __restrict_
 
 template<int M, int N, int K>
 void _launch_sgemm_naive_vec_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, cudaStream_t stream) {
-  static_assert((M&31) == 0 && (N&31) == 0 && (K&31) == 0, "M, N, K should be divisible by 32");
+  static_assert((M&31) == 0 && (N&31) == 0 && (K&8) == 0, "M, N, K should be divisible by 32");
   int constexpr blockSz = 128;
   int constexpr gridSz = (M*N + blockSz - 1) / blockSz;
   sgemm_naive_vec_kernel<M, N, K, double4><<<gridSz, blockSz, 0, stream>>>(A, B, C);
@@ -122,7 +123,7 @@ __global__ void sgemm_2dindex_kernel(float* __restrict__ a, float* __restrict__ 
 
 template<int M, int N, int K>
 void _launch_sgemm_2dindex_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, cudaStream_t stream) {
-  static_assert((M&31) == 0 && (N&31) == 0 && (K&31) == 0, "M, N, K should be divisible by 32");
+  static_assert((M&31) == 0 && (N&31) == 0 && (K&8) == 0, "M, N, K should be divisible by 32");
   dim3 constexpr blockSz(32, 32);
   dim3 constexpr gridSz((N + blockSz.x - 1) / blockSz.x, (M + blockSz.y - 1) / blockSz.y);
   sgemm_2dindex_kernel<M, N, K><<<gridSz, blockSz, 0, stream>>>(A, B, C);
@@ -169,7 +170,7 @@ __global__ void sgemm_2dindex_vec_kernel(float* __restrict__ A, float* __restric
 
 template<int M, int N, int K>
 void _launch_sgemm_2dindex_vec_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, cudaStream_t stream) {
-  static_assert((M&31) == 0 && (N&31) == 0 && (K&31) == 0, "M, N, K should be divisible by 32");
+  static_assert((M&31) == 0 && (N&31) == 0 && (K&8) == 0, "M, N, K should be divisible by 32");
   dim3 constexpr blockSz = {32, 32, 1};
   dim3 constexpr gridSz = {(N + blockSz.x - 1) / blockSz.x, (M + blockSz.y - 1) / blockSz.y, 1};
   sgemm_2dindex_vec_kernel<M, N, K, double2><<<gridSz, blockSz, 0, stream>>>(A, B, C);
@@ -230,7 +231,7 @@ __global__ void sgemm_block_tile_kernel(float* __restrict__ A, float* __restrict
 
 template<int M, int N, int K>
 void _launch_sgemm_block_tile_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, cudaStream_t stream) {
-  static_assert((M&31) == 0 && (N&31) == 0 && (K&31) == 0, "M, N, K should be divisible by 32");
+  static_assert((M&31) == 0 && (N&31) == 0 && (K&8) == 0, "M, N, K should be divisible by 32");
   int constexpr BM = 128; (void)BM;
   int constexpr BN = 128; (void)BN;
   int constexpr BK = 8; (void)BK;
@@ -264,18 +265,21 @@ __global__ void sgemm_block_tile_bank_conflict_kernel(float* __restrict__ A, flo
   float r_c[TM*TN] = {0.0,};
   float r_a[TM];
   float r_b[TN];
+  float4 r_load_a;
+  float4 r_load_b;
 
   int const tid = (ty * blockSz.x) + tx;
 
   #pragma unroll
   for (int bk = 0; bk < (K+BK-1)/BK; ++bk) {
     // ldg, sts
+    r_load_a = *(float4*)(A + by * BM * K + (tid >> 1) * K + bk * BK + (tid & 1) * 4);
+    r_load_b = *(float4*)(B + bk * BK * N + (tid >> 5) * N + bx * BN + (tid & 31) * 4);
     #pragma unroll
     for (int loopid = 0; loopid < 4; ++loopid) {
-      float4 val = *(float4*)(A + by * BM * K + (tid >> 1) * K + bk * BK + (tid & 1) * 4);
-      *(float*)(s_a + (tid & 1) * 4 * BM + loopid * BM + (tid >> 1)) = *((float*)&val + loopid);
+      *(float*)(s_a + (tid & 1) * 4 * BM + loopid * BM + (tid >> 1)) = *((float*)&r_load_a + loopid);
     }
-    *(float4*)(s_b + (tid >> 5) * BN + (tid & 31) * 4) = *(float4*)(B + bk * BK * N + (tid >> 5) * N + bx * BN + (tid & 31) * 4);
+    *(float4*)(s_b + (tid >> 5) * BN + (tid & 31) * 4) = r_load_b;
     __syncthreads();
 
     // mma
@@ -311,7 +315,7 @@ __global__ void sgemm_block_tile_bank_conflict_kernel(float* __restrict__ A, flo
 
 template<int M, int N, int K>
 void _launch_sgemm_block_tile_bank_conflict_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, cudaStream_t stream) {
-  static_assert((M&31) == 0 && (N&31) == 0 && (K&31) == 0, "M, N, K should be divisible by 32");
+  static_assert((M&31) == 0 && (N&31) == 0 && (K&8) == 0, "M, N, K should be divisible by 32");
   int constexpr BM = 128; (void)BM;
   int constexpr BN = 128; (void)BN;
   int constexpr BK = 8; (void)BK;
@@ -340,32 +344,49 @@ __global__ void sgemm_double_buffer_kernel(float* __restrict__ A, float* __restr
   dim3 constexpr blockSz(BN/TN, BM/TM);
   dim3 constexpr gridSz((N+BN-1)/BN, (M+BM-1)/BM); (void)gridSz;
 
-  __shared__ float s_a[BK*BM];
-  __shared__ float s_b[BK*BN];
+  __shared__ float s_a[2*BK*BM];
+  __shared__ float s_b[2*BK*BN];
   float r_c[TM*TN] = {0.0,};
   float r_a[TM];
   float r_b[TN];
+  float4 r_load_a;
+  float4 r_load_b;
 
   int const tid = (ty * blockSz.x) + tx;
 
-  #pragma unroll
-  for (int bk = 0; bk < (K+BK-1)/BK; ++bk) {
+  int s_buf_curr_id = 0;
+
+  {
+    int bk = 0;
     // ldg, sts
+    r_load_a = *(float4*)(A + by * BM * K + (tid >> 1) * K + bk * BK + (tid & 1) * 4);
+    r_load_b = *(float4*)(B + bk * BK * N + (tid >> 5) * N + bx * BN + (tid & 31) * 4);
     #pragma unroll
     for (int loopid = 0; loopid < 4; ++loopid) {
-      float4 val = *(float4*)(A + by * BM * K + (tid >> 1) * K + bk * BK + (tid & 1) * 4);
-      *(float*)(s_a + (tid & 1) * 4 * BM + loopid * BM + (tid >> 1)) = *((float*)&val + loopid);
+      *(float*)(s_a + s_buf_curr_id * BK * BM + (tid & 1) * 4 * BM + loopid * BM + (tid >> 1)) = *((float*)&r_load_a + loopid);
     }
-    *(float4*)(s_b + (tid >> 5) * BN + (tid & 31) * 4) = *(float4*)(B + bk * BK * N + (tid >> 5) * N + bx * BN + (tid & 31) * 4);
+    *(float4*)(s_b + s_buf_curr_id * BK * BN + (tid >> 5) * BN + (tid & 31) * 4) = r_load_b;
     __syncthreads();
+  }
+
+  #pragma unroll
+  for (int bk = 1; bk < (K+BK-1)/BK; ++bk) {
+    // ldg
+    r_load_a = *(float4*)(A + by * BM * K + (tid >> 1) * K + bk * BK + (tid & 1) * 4);
+    r_load_b = *(float4*)(B + bk * BK * N + (tid >> 5) * N + bx * BN + (tid & 31) * 4);
+    // #pragma unroll
+    // for (int loopid = 0; loopid < 4; ++loopid) {
+    //   *(float*)(s_a + (s_buf_curr_id ^ 1) * BK * BM + (tid & 1) * 4 * BM + loopid * BM + (tid >> 1)) = *((float*)&r_load_a + loopid);
+    // }
+    // *(float4*)(s_b + (s_buf_curr_id ^ 1) * BK * BN + (tid >> 5) * BN + (tid & 31) * 4) = r_load_b;
 
     // mma
     #pragma unroll
     for (int k = 0; k < BK; ++k) {
-      *(float4*)(r_a + 0) = *(float4*)(s_a + k * BM + 0 * 16 * 4 + ty * 4);
-      *(float4*)(r_a + 4) = *(float4*)(s_a + k * BM + 1 * 16 * 4 + ty * 4);
-      *(float4*)(r_b + 0) = *(float4*)(s_b + k * BN + 0 * 16 * 4 + tx * 4);
-      *(float4*)(r_b + 4) = *(float4*)(s_b + k * BN + 1 * 16 * 4 + tx * 4);
+      *(float4*)(r_a + 0) = *(float4*)(s_a + s_buf_curr_id * BK * BM + k * BM + 0 * 16 * 4 + ty * 4);
+      *(float4*)(r_a + 4) = *(float4*)(s_a + s_buf_curr_id * BK * BM + k * BM + 1 * 16 * 4 + ty * 4);
+      *(float4*)(r_b + 0) = *(float4*)(s_b + s_buf_curr_id * BK * BN + k * BN + 0 * 16 * 4 + tx * 4);
+      *(float4*)(r_b + 4) = *(float4*)(s_b + s_buf_curr_id * BK * BN + k * BN + 1 * 16 * 4 + tx * 4);
       #pragma unroll
       for (int m = 0; m < TM; ++m) {
         #pragma unroll
@@ -374,7 +395,32 @@ __global__ void sgemm_double_buffer_kernel(float* __restrict__ A, float* __restr
         }
       }
     }
+
+    // sts
+    #pragma unroll
+    for (int loopid = 0; loopid < 4; ++loopid) {
+      *(float*)(s_a + (s_buf_curr_id ^ 1) * BK * BM + (tid & 1) * 4 * BM + loopid * BM + (tid >> 1)) = *((float*)&r_load_a + loopid);
+    }
+    *(float4*)(s_b + (s_buf_curr_id ^ 1) * BK * BN + (tid >> 5) * BN + (tid & 31) * 4) = r_load_b;
+
+    s_buf_curr_id ^= 1;
     __syncthreads();
+  }
+
+  // mma
+  #pragma unroll
+  for (int k = 0; k < BK; ++k) {
+    *(float4*)(r_a + 0) = *(float4*)(s_a + s_buf_curr_id * BK * BM + k * BM + 0 * 16 * 4 + ty * 4);
+    *(float4*)(r_a + 4) = *(float4*)(s_a + s_buf_curr_id * BK * BM + k * BM + 1 * 16 * 4 + ty * 4);
+    *(float4*)(r_b + 0) = *(float4*)(s_b + s_buf_curr_id * BK * BN + k * BN + 0 * 16 * 4 + tx * 4);
+    *(float4*)(r_b + 4) = *(float4*)(s_b + s_buf_curr_id * BK * BN + k * BN + 1 * 16 * 4 + tx * 4);
+    #pragma unroll
+    for (int m = 0; m < TM; ++m) {
+      #pragma unroll
+      for (int n = 0; n < TN; ++n) {
+        *(float*)(r_c + m * TN + n) += (*(float*)(r_a + m)) * (*(float*)(r_b + n));
+      }
+    }
   }
 
   // stg
@@ -392,7 +438,7 @@ __global__ void sgemm_double_buffer_kernel(float* __restrict__ A, float* __restr
 
 template<int M, int N, int K>
 void _launch_sgemm_double_buffer_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, cudaStream_t stream) {
-  static_assert((M&31) == 0 && (N&31) == 0 && (K&31) == 0, "M, N, K should be divisible by 32");
+  static_assert((M&31) == 0 && (N&31) == 0 && (K&8) == 0, "M, N, K should be divisible by 32");
   int constexpr BM = 128; (void)BM;
   int constexpr BN = 128; (void)BN;
   int constexpr BK = 8; (void)BK;
@@ -406,6 +452,23 @@ void _launch_sgemm_double_buffer_kernel(float* __restrict__ A, float* __restrict
 
 
 ////////////////////////////////////////////////////////////////////////
+// 8. cublas
+// A: row_major [M, K]
+// B: row_major [K, N]
+// C: row_major [M, N]
+// cublas
+template<int M, int N, int K>
+void _launch_sgemm_cudnn_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, cudaStream_t stream) {
+  static cublasHandle_t cublas_handle = nullptr;
+  if (cublas_handle == nullptr) cublasCreate(&cublas_handle);
+  float cublas_alpha = 1.0;
+  float cublas_beta = 0;
+  // cublasSgemm(cublas_handle, CUBLAS_OP_T, CUBLAS_OP_T, M, N, K, &cublas_alpha, A, K, B, N, &cublas_beta, C, M);
+  cublasSgemm(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, N, M, K, &cublas_alpha, B, N, A, K, &cublas_beta, C, N);
+}
+
+
+////////////////////////////////////////////////////////////////////////
 void sgemm_cuda(float* __restrict__ A, float* __restrict__ B, float* __restrict__ AT, float* __restrict__ BT, float* __restrict__ C, int M, int N, int K, cudaStream_t stream) {
   #define IF_STAT if (false)
   // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_naive_kernel<(m), (n), (k)>(A, B, C, stream)
@@ -414,13 +477,16 @@ void sgemm_cuda(float* __restrict__ A, float* __restrict__ B, float* __restrict_
   // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_2dindex_vec_kernel<(m), (n), (k)>(A, BT, C, stream)
   // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_block_tile_kernel<(m), (n), (k)>(A, B, C, stream)
   // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_block_tile_bank_conflict_kernel<(m), (n), (k)>(A, B, C, stream)
-  #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_double_buffer_kernel<(m), (n), (k)>(A, B, C, stream)
+  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_double_buffer_kernel<(m), (n), (k)>(A, B, C, stream)
+  #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_cudnn_kernel<(m), (n), (k)>(A, B, C, stream)
   #define ELSE_STAT else { std::cout << "NOT_IMPLEMENTED" << std::endl; __builtin_trap(); }
 
   IF_STAT;
   ELIF_STAT(32, 32, 32);
   ELIF_STAT(128, 128, 128);
   ELIF_STAT(1024, 1024, 1024);
+  ELIF_STAT(640000, 128, 32);
+  ELIF_STAT(640000, 32, 16);
   ELSE_STAT;
 
   #undef IF_STAT

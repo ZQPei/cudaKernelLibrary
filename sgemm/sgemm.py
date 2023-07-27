@@ -46,3 +46,5 @@ def test_batch_norm_relu_max(M, N, K, in_type, out_type):
 
 if __name__ == "__main__":
     test_batch_norm_relu_max(1024, 1024, 1024, "float32", "float32")
+    test_batch_norm_relu_max(640000, 128, 32, "float32", "float32")
+    test_batch_norm_relu_max(640000, 32, 16, "float32", "float32")
