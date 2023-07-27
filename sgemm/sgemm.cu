@@ -396,7 +396,7 @@ __global__ void sgemm_double_buffer_kernel(float* __restrict__ A, float* __restr
       }
     }
 
-    // sts
+    // sts (do sts after mma to hide latency of ldg)
     #pragma unroll
     for (int loopid = 0; loopid < 4; ++loopid) {
       *(float*)(s_a + (s_buf_curr_id ^ 1) * BK * BM + (tid & 1) * 4 * BM + loopid * BM + (tid >> 1)) = *((float*)&r_load_a + loopid);
@@ -452,7 +452,7 @@ void _launch_sgemm_double_buffer_kernel(float* __restrict__ A, float* __restrict
 
 
 ////////////////////////////////////////////////////////////////////////
-// 8. cublas
+// benchmark: cublas
 // A: row_major [M, K]
 // B: row_major [K, N]
 // C: row_major [M, N]
