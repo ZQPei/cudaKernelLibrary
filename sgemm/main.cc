@@ -52,11 +52,11 @@ int main(int argc, char **argv) {
   Tensor<float> C({M, N});
 
   // init
-  cudaStream_t stream;
-  cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+  cudaStream_t stream = cudaStreamDefault;
+  // cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
   if (FLAGS_verbose) std::cout << "init ..." << std::endl;
-  if (FLAGS_verbose) profilerShowData(A.d_ptr, M * K, std::string("./data/A_") + _postfix, true);
-  if (FLAGS_verbose) profilerShowData(B.d_ptr, N * K, std::string("./data/B_") + _postfix, true);
+  if (FLAGS_verbose) A.show();
+  if (FLAGS_verbose) B.show();
   cuAssert(cudaGetLastError());
 
   // run
@@ -75,9 +75,11 @@ int main(int argc, char **argv) {
   // compare output
   if (FLAGS_doRefCheck) {
     if (FLAGS_verbose) std::cout << "compare output with reference ..." << std::endl;
+    cudaStreamSynchronize(stream);
+    cuAssert(cudaGetLastError());
     C.d2h();
-    CRef.show();
-    C.show();
+    if (FLAGS_verbose) CRef.show();
+    if (FLAGS_verbose) C.show();
     compareValue(C.h_ptr, CRef.h_ptr, C.size, 1e-2, true);
   }
 
@@ -85,6 +87,7 @@ int main(int argc, char **argv) {
   if (FLAGS_doProfile) {
     if (FLAGS_verbose) std::cout << "test performance ..." << std::endl;
     cudaStreamSynchronize(stream);
+    cuAssert(cudaGetLastError());
     float ms = testPerf(test_func, stream);
     std::cout << "PERF: " << ms << " ms" << std::endl;
     float flops = 2 * long(M) * N * K;
@@ -94,6 +97,7 @@ int main(int argc, char **argv) {
 
   // free
   if (FLAGS_verbose) std::cout << "free ..." << std::endl;
+  cudaStreamSynchronize(stream);
   cuAssert(cudaGetLastError());
   return 0;
 }

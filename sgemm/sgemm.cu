@@ -9,6 +9,7 @@ __host__ __device__ __inline__ int constexpr getBits() {
     CASE_X(0); CASE_X(1); CASE_X(2); CASE_X(3); CASE_X(4); CASE_X(5); CASE_X(6); CASE_X(7); CASE_X(8); CASE_X(9);
     CASE_X(10); CASE_X(11); CASE_X(12); CASE_X(13); CASE_X(14); CASE_X(15); CASE_X(16); CASE_X(17); CASE_X(18); CASE_X(19);
     #undef CASE_X
+    default: return 0;
   }
 }
 
@@ -18,7 +19,8 @@ __host__ __device__ __inline__ int constexpr getBits() {
 #define bx blockIdx.x
 #define by blockIdx.y
 #define bz blockIdx.z
-#define OFFSET(row, col, stride) (((row) << (getBits<(stride)>())) + (col))
+// #define OFFSET(row, col, stride) (((row) << (getBits<(stride)>())) + (col))
+#define OFFSET(row, col, stride) (((row) * stride) + (col))
 #define FLOAT4(pointer) (reinterpret_cast<float4*>(&(pointer))[0])
 
 ////////////////////////////////////////////////////////////////////////
@@ -333,16 +335,29 @@ void _launch_sgemm_block_tile_bank_conflict_kernel(float* __restrict__ A, float*
 // A: row_major [M, K]
 // B: row_major [K, N]
 // C: row_major [M, N]
+
+// #undef tx
+// #undef ty
+// #undef tz
+// #undef bx
+// #undef by
+// #undef bz
+
 template<int M, int N, int K>
 __global__ void sgemm_double_buffer_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C) {
+// __global__ void sgemm_double_buffer_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, int M, int N, int K) {
   int constexpr BM = 128;  // tunable
   int constexpr BN = 128;  // tunable
   int constexpr BK = 8;
   int constexpr TM = 8;  // tunable
   int constexpr TN = 8;  // tunable
 
+  // const int bx = blockIdx.x;
+  // const int by = blockIdx.y;
+  // const int tx = threadIdx.x;
+  // const int ty = threadIdx.y;
+
   dim3 constexpr blockSz(BN/TN, BM/TM);
-  dim3 constexpr gridSz((N+BN-1)/BN, (M+BM-1)/BM); (void)gridSz;
 
   __shared__ float s_a[2*BK*BM];
   __shared__ float s_b[2*BK*BN];
@@ -450,6 +465,164 @@ void _launch_sgemm_double_buffer_kernel(float* __restrict__ A, float* __restrict
   sgemm_double_buffer_kernel<M, N, K><<<gridSz, blockSz, 0, stream>>>(A, B, C);
 }
 
+// void _launch_sgemm_double_buffer_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, int M, int N, int K, cudaStream_t stream) {
+//   // static_assert((M&31) == 0 && (N&31) == 0 && (K&8) == 0, "M, N, K should be divisible by 32");
+//   int constexpr BM = 128; (void)BM;
+//   int constexpr BN = 128; (void)BN;
+//   int constexpr BK = 8; (void)BK;
+//   int constexpr TM = 8; (void)TM;
+//   int constexpr TN = 8; (void)TN;
+
+//   dim3 constexpr blockSz(BN/TN, BM/TM);
+//   dim3 const gridSz((N+BN-1)/BN, (M+BM-1)/BM);
+//   sgemm_double_buffer_kernel<<<gridSz, blockSz, 0, stream>>>(A, B, C, M, N, K);
+// }
+
+
+////////////////////////////////////////////////////////////////////////
+// 8. github nicholas v3 impl
+// A: row_major [M, K]
+// B: row_major [K, N]
+// C: row_major [M, N]
+
+#undef tx
+#undef ty
+#undef tz
+#undef bx
+#undef by
+#undef bz
+
+// template<int M, int N, int K>
+__global__ void sgemm_nicholas_v3_kernel(float* __restrict__ a, float* __restrict__ b, float* __restrict__ c, int M, int N, int K) {
+  const int BM = 128;
+  const int BN = 128;
+  const int BK = 8;
+  const int TM = 8;
+  const int TN = 8;
+
+  const int bx = blockIdx.x;
+  const int by = blockIdx.y;
+  const int tx = threadIdx.x;
+  const int ty = threadIdx.y;
+  const int tid = ty * blockDim.x + tx;
+
+  __shared__ float s_a[2][BK][BM];
+  __shared__ float s_b[2][BK][BN];
+
+  float r_load_a[4];
+  float r_load_b[4];
+  float r_comp_a[TM];
+  float r_comp_b[TN];
+  float r_c[TM][TN] = {0.0};
+
+  int load_a_smem_m = tid >> 1;
+  int load_a_smem_k = (tid & 1) << 2;
+  int load_b_smem_k = tid >> 5;
+  int load_b_smem_n = (tid & 31) << 2;
+
+  int load_a_gmem_m = by * BM + load_a_smem_m;
+  int load_b_gmem_n = bx * BN + load_b_smem_n;
+
+  {
+      int load_a_gmem_k = load_a_smem_k;
+      int load_a_gmem_addr = OFFSET(load_a_gmem_m, load_a_gmem_k, K);
+      int load_b_gmem_k = load_b_smem_k;
+      int load_b_gmem_addr = OFFSET(load_b_gmem_k, load_b_gmem_n, N);
+      FLOAT4(r_load_a[0]) = FLOAT4(a[load_a_gmem_addr]);
+      FLOAT4(r_load_b[0]) = FLOAT4(b[load_b_gmem_addr]);
+
+      s_a[0][load_a_smem_k    ][load_a_smem_m] = r_load_a[0];
+      s_a[0][load_a_smem_k + 1][load_a_smem_m] = r_load_a[1];
+      s_a[0][load_a_smem_k + 2][load_a_smem_m] = r_load_a[2];
+      s_a[0][load_a_smem_k + 3][load_a_smem_m] = r_load_a[3];
+      FLOAT4(s_b[0][load_b_smem_k][load_b_smem_n]) = FLOAT4(r_load_b[0]);
+      __syncthreads();
+  }
+
+  for (int bk = 1; bk < (K + BK - 1) / BK; bk++) {
+
+      int smem_sel = (bk - 1) & 1;
+      int smem_sel_next = bk & 1;
+
+      int load_a_gmem_k = bk * BK + load_a_smem_k;
+      int load_a_gmem_addr = OFFSET(load_a_gmem_m, load_a_gmem_k, K);
+      int load_b_gmem_k = bk * BK + load_b_smem_k;
+      int load_b_gmem_addr = OFFSET(load_b_gmem_k, load_b_gmem_n, N);
+      FLOAT4(r_load_a[0]) = FLOAT4(a[load_a_gmem_addr]);
+      FLOAT4(r_load_b[0]) = FLOAT4(b[load_b_gmem_addr]);
+
+      #pragma unroll
+      for (int tk = 0; tk < BK; tk++) {
+          FLOAT4(r_comp_a[0]) = FLOAT4(s_a[smem_sel][tk][ty * TM / 2         ]);
+          FLOAT4(r_comp_a[4]) = FLOAT4(s_a[smem_sel][tk][ty * TM / 2 + BM / 2]);
+          FLOAT4(r_comp_b[0]) = FLOAT4(s_b[smem_sel][tk][tx * TN / 2         ]);
+          FLOAT4(r_comp_b[4]) = FLOAT4(s_b[smem_sel][tk][tx * TN / 2 + BN / 2]);
+
+          #pragma unroll
+          for (int tm = 0; tm < TM; tm++) {
+              #pragma unroll
+              for (int tn = 0; tn < TN; tn++) {
+                  r_c[tm][tn] += r_comp_a[tm] * r_comp_b[tn];
+              }
+          }
+      }
+
+      s_a[smem_sel_next][load_a_smem_k    ][load_a_smem_m] = r_load_a[0];
+      s_a[smem_sel_next][load_a_smem_k + 1][load_a_smem_m] = r_load_a[1];
+      s_a[smem_sel_next][load_a_smem_k + 2][load_a_smem_m] = r_load_a[2];
+      s_a[smem_sel_next][load_a_smem_k + 3][load_a_smem_m] = r_load_a[3];
+      FLOAT4(s_b[smem_sel_next][load_b_smem_k][load_b_smem_n]) = FLOAT4(r_load_b[0]);
+
+      __syncthreads();
+  }
+
+  #pragma unroll
+  for (int tk = 0; tk < BK; tk++) {
+      FLOAT4(r_comp_a[0]) = FLOAT4(s_a[1][tk][ty * TM / 2         ]);
+      FLOAT4(r_comp_a[4]) = FLOAT4(s_a[1][tk][ty * TM / 2 + BM / 2]);
+      FLOAT4(r_comp_b[0]) = FLOAT4(s_b[1][tk][tx * TN / 2         ]);
+      FLOAT4(r_comp_b[4]) = FLOAT4(s_b[1][tk][tx * TN / 2 + BN / 2]);
+
+      #pragma unroll
+      for (int tm = 0; tm < TM; tm++) {
+          #pragma unroll
+          for (int tn = 0; tn < TN; tn++) {
+              r_c[tm][tn] += r_comp_a[tm] * r_comp_b[tn];
+          }
+      }
+  }
+
+  #pragma unroll
+  for (int i = 0; i < TM / 2; i++) {
+      int store_c_gmem_m = by * BM + ty * TM / 2 + i;
+      int store_c_gmem_n = bx * BN + tx * TN / 2;
+      int store_c_gmem_addr = OFFSET(store_c_gmem_m, store_c_gmem_n, N);
+      FLOAT4(c[store_c_gmem_addr]) = FLOAT4(r_c[i][0]);
+      FLOAT4(c[store_c_gmem_addr + BN / 2]) = FLOAT4(r_c[i][4]);
+  }
+  #pragma unroll
+  for (int i = 0; i < TM / 2; i++) {
+      int store_c_gmem_m = by * BM + BM / 2 + ty * TM / 2 + i;
+      int store_c_gmem_n = bx * BN + tx * TN / 2;
+      int store_c_gmem_addr = OFFSET(store_c_gmem_m, store_c_gmem_n, N);
+      FLOAT4(c[store_c_gmem_addr]) = FLOAT4(r_c[i + TM / 2][0]);
+      FLOAT4(c[store_c_gmem_addr + BN / 2]) = FLOAT4(r_c[i + TM / 2][4]);
+  }
+}
+
+void _launch_sgemm_nicholas_v3_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, int M, int N, int K, cudaStream_t stream) {
+  // static_assert((M&31) == 0 && (N&31) == 0 && (K&8) == 0, "M, N, K should be divisible by 32");
+  int constexpr BM = 128; (void)BM;
+  int constexpr BN = 128; (void)BN;
+  int constexpr BK = 8; (void)BK;
+  int constexpr TM = 8; (void)TM;
+  int constexpr TN = 8; (void)TN;
+
+  dim3 const blockSz(BN/TN, BM/TM);
+  dim3 const gridSz((N+BN-1)/BN, (M+BM-1)/BM);
+  sgemm_nicholas_v3_kernel<<<gridSz, blockSz, 0, stream>>>(A, B, C, M, N, K);
+}
+
 
 ////////////////////////////////////////////////////////////////////////
 // benchmark: cublas
@@ -481,6 +654,9 @@ void sgemm_cuda(float* __restrict__ A, float* __restrict__ B, float* __restrict_
   // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_block_tile_kernel<(m), (n), (k)>(A, B, C, stream)
   // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_block_tile_bank_conflict_kernel<(m), (n), (k)>(A, B, C, stream)
   #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_double_buffer_kernel<(m), (n), (k)>(A, B, C, stream)
+  // // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_double_buffer_kernel(A, B, C, M, N, K, stream)
+  // // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_nicholas_v3_kernel<(m), (n), (k)>(A, B, C, stream)
+  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_nicholas_v3_kernel(A, B, C, M, N, K, stream)
   // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_cudnn_kernel<(m), (n), (k)>(A, B, C, stream)
   #define ELSE_STAT else { std::cout << "NOT_IMPLEMENTED" << std::endl; __builtin_trap(); }
 
@@ -496,5 +672,5 @@ void sgemm_cuda(float* __restrict__ A, float* __restrict__ B, float* __restrict_
   #undef ELIF_STAT
   #undef ELSE_STAT
 
-  cudaStreamSynchronize(stream);
+  // cudaStreamSynchronize(stream);
 }
