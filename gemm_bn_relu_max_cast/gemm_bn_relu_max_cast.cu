@@ -298,6 +298,12 @@ extern "C" __global__ void __launch_bounds__(128) tvmgen_default_fused_nn_dense_
       r_vmax.x = hmaxh(r_vmax.x, r_vmax_shfl.x);
       r_vmax.y = hmaxh(r_vmax.y, r_vmax_shfl.y);
     }
+    // #pragma unroll
+    // for (int i = 16; i > 0; i >>= 1) {
+    //   half2 r_vmax_shfl = __shfl_down_sync(0xffffffff, r_vmax, i);
+    //   r_vmax.x = hmaxh(r_vmax.x, r_vmax_shfl.x);
+    //   r_vmax.y = hmaxh(r_vmax.y, r_vmax_shfl.y);
+    // }
     r_vmaxf.x = __half2float(r_vmax.x);
     r_vmaxf.y = __half2float(r_vmax.y);
 

@@ -344,7 +344,7 @@ void _launch_sgemm_block_tile_bank_conflict_kernel(float* __restrict__ A, float*
 // #undef bz
 
 template<int M, int N, int K>
-__global__ void __launch_bounds__(256) sgemm_double_buffer_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C) {
+__global__ void sgemm_double_buffer_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C) {
 // __global__ void sgemm_double_buffer_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, int M, int N, int K) {
   int constexpr BM = 128;  // tunable
   int constexpr BN = 128;  // tunable
@@ -631,7 +631,7 @@ void _launch_sgemm_nicholas_v3_kernel(float* __restrict__ A, float* __restrict__
 // C: row_major [M, N]
 // cublas
 template<int M, int N, int K>
-void _launch_sgemm_cublas_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, cudaStream_t stream) {
+void _launch_sgemm_cudnn_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, cudaStream_t stream) {
   static cublasHandle_t cublas_handle = nullptr;
   if (cublas_handle == nullptr) {
     cublasCreate(&cublas_handle);
@@ -657,7 +657,7 @@ void sgemm_cuda(float* __restrict__ A, float* __restrict__ B, float* __restrict_
   // // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_double_buffer_kernel(A, B, C, M, N, K, stream)
   // // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_nicholas_v3_kernel<(m), (n), (k)>(A, B, C, stream)
   // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_nicholas_v3_kernel(A, B, C, M, N, K, stream)
-  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_cublas_kernel<(m), (n), (k)>(A, B, C, stream)
+  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_cudnn_kernel<(m), (n), (k)>(A, B, C, stream)
   #define ELSE_STAT else { std::cout << "NOT_IMPLEMENTED" << std::endl; __builtin_trap(); }
 
   IF_STAT;
