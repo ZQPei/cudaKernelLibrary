@@ -180,45 +180,64 @@ void profilerSaveData(T *data, const size_t count, std::string save_name, bool i
 }
 
 template<typename T>
-bool compareValue(T *hOutput, T *hOutputRef, size_t size, float const eps = 1e-3, bool verbose = false);
+bool compareValue(T *hOutput, T *hOutputRef, size_t size, float const eps = 1e-3, bool verbose = false) {
+  // const float eps = 0.001;
+  bool result = true;
 
-template<>
-bool compareValue(float *hOutput, float *hOutputRef, size_t size, float const eps, bool verbose) {
-    // const float eps = 0.001;
-    bool result = true;
+  #pragma omp parallel for reduction(&&:result)
+  for (size_t i = 0; i < size; i++) {
+      if (fabs((float)(hOutput[i]) - (float)(hOutputRef[i])) > eps) {
+          result = false;
+      }
+  }
 
-    #pragma omp parallel for reduction(&&:result)
-    for (size_t i = 0; i < size; i++) {
-        if (fabs(hOutput[i] - hOutputRef[i]) > eps) {
-            result = false;
-        }
-    }
-
-    if (verbose) {
-      if (result) std::cout << "check pass ..." << std::endl;
-      else std::cout << "check failed ..." << std::endl;
-    }
-    return result;
+  if (verbose) {
+    if (result) std::cout << "check pass ..." << std::endl;
+    else std::cout << "check failed ..." << std::endl;
+  }
+  return result;
 }
 
-template<>
-bool compareValue(__half *hOutput, __half *hOutputRef, size_t size, float const eps, bool verbose) {
-    // const float eps = 0.001;
-    bool result = true;
+// template<typename T>
+// bool compareValue(T *hOutput, T *hOutputRef, size_t size, float const eps = 1e-3, bool verbose = false);
 
-    #pragma omp parallel for reduction(&&:result)
-    for (size_t i = 0; i < size; i++) {
-        if (fabs(__half2float(hOutput[i]) - __half2float(hOutputRef[i])) > eps) {
-            result = false;
-        }
-    }
+// template<>
+// bool compareValue(float *hOutput, float *hOutputRef, size_t size, float const eps, bool verbose) {
+//   // const float eps = 0.001;
+//   bool result = true;
 
-    if (verbose) {
-      if (result) std::cout << "check pass ..." << std::endl;
-      else std::cout << "check failed ..." << std::endl;
-    }
-    return result;
-}
+//   #pragma omp parallel for reduction(&&:result)
+//   for (size_t i = 0; i < size; i++) {
+//       if (fabs(hOutput[i] - hOutputRef[i]) > eps) {
+//           result = false;
+//       }
+//   }
+
+//   if (verbose) {
+//     if (result) std::cout << "check pass ..." << std::endl;
+//     else std::cout << "check failed ..." << std::endl;
+//   }
+//   return result;
+// }
+
+// template<>
+// bool compareValue(__half *hOutput, __half *hOutputRef, size_t size, float const eps, bool verbose) {
+//   // const float eps = 0.001;
+//   bool result = true;
+
+//   #pragma omp parallel for reduction(&&:result)
+//   for (size_t i = 0; i < size; i++) {
+//       if (fabs(__half2float(hOutput[i]) - __half2float(hOutputRef[i])) > eps) {
+//           result = false;
+//       }
+//   }
+
+//   if (verbose) {
+//     if (result) std::cout << "check pass ..." << std::endl;
+//     else std::cout << "check failed ..." << std::endl;
+//   }
+//   return result;
+// }
 
 template<typename T>
 inline std::string getTypeString();
