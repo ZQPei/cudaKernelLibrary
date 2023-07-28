@@ -460,7 +460,10 @@ void _launch_sgemm_double_buffer_kernel(float* __restrict__ A, float* __restrict
 template<int M, int N, int K>
 void _launch_sgemm_cudnn_kernel(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, cudaStream_t stream) {
   static cublasHandle_t cublas_handle = nullptr;
-  if (cublas_handle == nullptr) cublasCreate(&cublas_handle);
+  if (cublas_handle == nullptr) {
+    cublasCreate(&cublas_handle);
+    cublasSetStream(cublas_handle, stream);
+  }
   float cublas_alpha = 1.0;
   float cublas_beta = 0;
   // cublasSgemm(cublas_handle, CUBLAS_OP_T, CUBLAS_OP_T, M, N, K, &cublas_alpha, A, K, B, N, &cublas_beta, C, M);
@@ -477,8 +480,8 @@ void sgemm_cuda(float* __restrict__ A, float* __restrict__ B, float* __restrict_
   // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_2dindex_vec_kernel<(m), (n), (k)>(A, BT, C, stream)
   // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_block_tile_kernel<(m), (n), (k)>(A, B, C, stream)
   // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_block_tile_bank_conflict_kernel<(m), (n), (k)>(A, B, C, stream)
-  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_double_buffer_kernel<(m), (n), (k)>(A, B, C, stream)
-  #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_cudnn_kernel<(m), (n), (k)>(A, B, C, stream)
+  #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_double_buffer_kernel<(m), (n), (k)>(A, B, C, stream)
+  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_sgemm_cudnn_kernel<(m), (n), (k)>(A, B, C, stream)
   #define ELSE_STAT else { std::cout << "NOT_IMPLEMENTED" << std::endl; __builtin_trap(); }
 
   IF_STAT;
