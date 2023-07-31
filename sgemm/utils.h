@@ -278,11 +278,24 @@ inline std::string getTypeString<int>() { return "int32"; }
     cuAssert(cudaGetLastError()); \
   } while (0)
 
+template <typename T>
+std::ostream& operator<<(std::ostream& os, const std::vector<T>& vec) {
+    // Printing all the elements
+    os << "[ ";
+    for (auto element : vec) {
+        os << element << " ";
+    }
+    os << "]";
+    return os;
+}
+
 template<typename T>
 class Tensor {
 public:
   Tensor(size_t _size, std::string _data_path = ""):
       size(_size) {
+    shape.clear();
+    shape.push_back(size);
     cudaMallocHost(&h_ptr, _size * sizeof(T));
     cudaMalloc(&d_ptr, _size * sizeof(T));
     cuAssert(cudaGetLastError());
@@ -325,7 +338,7 @@ public:
   }
 
   void show() {
-    std::cout << "show data of size " << size << std::endl;
+    std::cout << "Tensor size: " << size << " " << ", shape: " << shape << std::endl;
     profilerShowData(h_ptr, size, data_path, false);
   }
 

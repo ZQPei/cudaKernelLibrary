@@ -663,8 +663,12 @@ void sgemm_cuda(float* __restrict__ A, float* __restrict__ B, float* __restrict_
   IF_STAT;
   ELIF_STAT(32, 32, 32);
   ELIF_STAT(128, 128, 128);
+  ELIF_STAT(1024, 128, 128);
+  ELIF_STAT(1024, 1024, 128);
+  ELIF_STAT(1024, 128, 1024);
   ELIF_STAT(1024, 1024, 1024);
   ELIF_STAT(640000, 128, 32);
+  ELIF_STAT(640000, 128, 128);
   ELIF_STAT(640000, 32, 16);
   ELSE_STAT;
 

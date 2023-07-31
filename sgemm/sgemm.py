@@ -41,10 +41,14 @@ def test_batch_norm_relu_max(M, N, K, in_type, out_type):
     B.tofile(f"./data/B_{M}_{N}_{K}_{in_type}_{out_type}.bin")
     B.transpose(1,0).tofile(f"./data/BT_{M}_{N}_{K}_{in_type}_{out_type}.bin")
     C.tofile(f"./data/C_ref_{M}_{N}_{K}_{in_type}_{out_type}.bin")
-    import ipdb; ipdb.set_trace()
+    # import ipdb; ipdb.set_trace()
 
 
 if __name__ == "__main__":
+    test_batch_norm_relu_max(1024, 128, 128, "float32", "float32")
+    test_batch_norm_relu_max(1024, 1024, 128, "float32", "float32")
+    test_batch_norm_relu_max(1024, 128, 1024, "float32", "float32")
     test_batch_norm_relu_max(1024, 1024, 1024, "float32", "float32")
+    test_batch_norm_relu_max(640000, 128, 128, "float32", "float32")
     test_batch_norm_relu_max(640000, 128, 32, "float32", "float32")
     test_batch_norm_relu_max(640000, 32, 16, "float32", "float32")
