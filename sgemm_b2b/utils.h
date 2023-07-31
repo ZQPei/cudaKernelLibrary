@@ -299,6 +299,7 @@ public:
     cudaMallocHost(&h_ptr, _size * sizeof(T));
     cudaMalloc(&d_ptr, _size * sizeof(T));
     cuAssert(cudaGetLastError());
+    std::cout << "Tensor size: " << size << " " << ", shape: " << shape << std::endl;
     if (_data_path.size()) load(_data_path);
   }
 
@@ -321,6 +322,7 @@ public:
     cudaMallocHost(&h_ptr, size * sizeof(T));
     cudaMalloc(&d_ptr, size * sizeof(T));
     cuAssert(cudaGetLastError());
+    std::cout << "Tensor size: " << size << " " << ", shape: " << shape << std::endl;
     if (_data_path.size()) load(_data_path);
   }
 
@@ -340,6 +342,11 @@ public:
   void show() {
     std::cout << "Tensor size: " << size << " " << ", shape: " << shape << std::endl;
     profilerShowData(h_ptr, size, data_path, false);
+  }
+
+  void save(std::string _save_path) {
+    std::cout << "save to: " << _save_path << std::endl;
+    profilerSaveData(h_ptr, size, _save_path, false);
   }
 
   void fill_random() {

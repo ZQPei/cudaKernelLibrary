@@ -87,6 +87,7 @@ int main(int argc, char **argv) {
     compareValue(mid.h_ptr, midRef.h_ptr, mid.size, 1e-2, true);
     if (FLAGS_verbose) outRef.show();
     if (FLAGS_verbose) out.show();
+    if (FLAGS_verbose) out.save(std::string("./data/out_") + _postfix);
     compareValue(out.h_ptr, outRef.h_ptr, out.size, 1e-2, true);
   }
 
