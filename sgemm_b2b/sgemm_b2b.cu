@@ -79,7 +79,7 @@ __global__ void __launch_bounds__(256) sgemm_b2b_kernel(float* __restrict__ a, f
     int bk = 0;
     // ldg, sts
     r_load_a = *(float4*)(a + by * BM * K1 + (tid >> 1) * K1 + bk * SPLITK1 + (tid & 1) * 4);
-    r_load_b = *(float4*)(b1 + bk * SPLITK1 * K2 + (tid >> 5) * K2 + bx * BK2 + (tid & 31) * 4);
+    r_load_b = *(float4*)(b1 + bk * SPLITK1 * K2 + (tid >> 5) * K2 + (bx&(K2/BK2-1)) * BK2 + (tid & 31) * 4);
     #pragma unroll
     for (int loopid = 0; loopid < 4; ++loopid) {
       *(float*)(s_a + s_buf_curr_id * SPLITK1 * BM + (tid & 1) * 4 * BM + loopid * BM + (tid >> 1)) = *((float*)&r_load_a + loopid);
@@ -93,7 +93,7 @@ __global__ void __launch_bounds__(256) sgemm_b2b_kernel(float* __restrict__ a, f
   for (int bk = 1; bk < (K1+SPLITK1-1)/SPLITK1; ++bk) {
     // ldg
     r_load_a = *(float4*)(a + by * BM * K1 + (tid >> 1) * K1 + bk * SPLITK1 + (tid & 1) * 4);
-    r_load_b = *(float4*)(b1 + bk * SPLITK1 * K2 + (tid >> 5) * K2 + bx * BK2 + (tid & 31) * 4);
+    r_load_b = *(float4*)(b1 + bk * SPLITK1 * K2 + (tid >> 5) * K2 + (bx&(K2/BK2-1)) * BK2 + (tid & 31) * 4);
     // #pragma unroll
     // for (int loopid = 0; loopid < 4; ++loopid) {
     //   *(float*)(s_a + (s_buf_curr_id ^ 1) * SPLITK1 * BM + (tid & 1) * 4 * BM + loopid * BM + (tid >> 1)) = *((float*)&r_load_a + loopid);
@@ -150,7 +150,7 @@ __global__ void __launch_bounds__(256) sgemm_b2b_kernel(float* __restrict__ a, f
   //   for (int m = 0; m < TM/2; ++m) {
   //     #pragma unroll
   //     for (int j = 0; j < 2; ++j) {
-  //       *(float4*)(mid + by * BM * K2 + i * (BM>>1) * K2 + ty * (TM>>1) * K2 + m * K2 + bx * BK2 + j * (BK2>>1) + tx * 4) = *(float4*)(r_mid + i * 32 + m * 8 + j * 4);
+  //       *(float4*)(mid + by * BM * K2 + i * (BM>>1) * K2 + ty * (TM>>1) * K2 + m * K2 + (bx&(K2/BK2-1)) * BK2 + j * (BK2>>1) + tx * 4) = *(float4*)(r_mid + i * 32 + m * 8 + j * 4);
   //     }
   //   }
   // }
@@ -247,7 +247,7 @@ __global__ void __launch_bounds__(256) sgemm_b2b_kernel(float* __restrict__ a, f
     for (int m = 0; m < TM/2; ++m) {
       #pragma unroll
       for (int j = 0; j < 2; ++j) {
-        *(float4*)(c + by * BM * N + i * (BM>>1) * N + ty * (TM>>1) * N + m * N + bx * BK2 + j * (BK2>>1) + tx * 4) = *(float4*)(r_c + i * 32 + m * 8 + j * 4);
+        *(float4*)(c + by * BM * N + i * (BM>>1) * N + ty * (TM>>1) * N + m * N + bx * BN + j * (BK2>>1) + tx * 4) = *(float4*)(r_c + i * 32 + m * 8 + j * 4);
       }
     }
   }
