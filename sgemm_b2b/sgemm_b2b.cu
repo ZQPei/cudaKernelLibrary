@@ -144,18 +144,16 @@ __global__ void __launch_bounds__(256) sgemm_b2b_kernel(float* __restrict__ a, f
   }
 
   // stg
-  #pragma unroll
-  for (int i = 0; i < 2; ++i) {
-    #pragma unroll
-    for (int m = 0; m < TM/2; ++m) {
-      #pragma unroll
-      for (int j = 0; j < 2; ++j) {
-        *(float4*)(mid + by * BM * K2 + i * (BM>>1) * K2 + ty * (TM>>1) * K2 + m * K2 + bx * BK2 + j * (BK2>>1) + tx * 4) = *(float4*)(r_mid + i * 32 + m * 8 + j * 4);
-      }
-    }
-  }
-
-  __syncthreads();
+  // #pragma unroll
+  // for (int i = 0; i < 2; ++i) {
+  //   #pragma unroll
+  //   for (int m = 0; m < TM/2; ++m) {
+  //     #pragma unroll
+  //     for (int j = 0; j < 2; ++j) {
+  //       *(float4*)(mid + by * BM * K2 + i * (BM>>1) * K2 + ty * (TM>>1) * K2 + m * K2 + bx * BK2 + j * (BK2>>1) + tx * 4) = *(float4*)(r_mid + i * 32 + m * 8 + j * 4);
+  //     }
+  //   }
+  // }
 
   ///////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -184,63 +182,9 @@ __global__ void __launch_bounds__(256) sgemm_b2b_kernel(float* __restrict__ a, f
     __syncthreads();
   }
 
-  // __syncthreads();
-
-  // if (bx == 0 && by == 0 && tx == 0 && ty == 0) {
-  //   for (int i = 0; i < 4; ++i) {
-  //     for (int j = 0; j < 128; ++j) {
-  //       printf("%f ", s_mid[i*128+j]);
-  //     }
-  //     // for (int j = 128-4; j < 128; ++j) {
-  //     //   printf("%f ", s_mid[i*128+j]);
-  //     // }
-  //     printf("\n");
-  //   }
-  //   printf("=========\n");
-  //   for (int i = 0; i < 4; ++i) {
-  //     for (int j = 0; j < 128; ++j) {
-  //       printf("%f ", s_b2[i*128+j]);
-  //     }
-  //     // for (int j = 128-4; j < 128; ++j) {
-  //     //   printf("%f ", s_b2[i*128+j]);
-  //     // }
-  //     printf("\n");
-  //   }
-  //   printf("=========\n");
-  // }
-
-  // __syncthreads();
-
   // main loop
   #pragma unroll
   for (int bk = 1; bk < (K2+SPLITK2-1)/SPLITK2; ++bk) {
-    __syncthreads();
-
-    if (bx == 0 && by == 0 && tx == 0 && ty == 0 && bk-1 == 7) {
-      for (int i = 0; i < 4; ++i) {
-        for (int j = 0; j < 128; ++j) {
-          printf("%f ", s_mid[s_buf_curr_id * SPLITK2 * BM + i*128+j]);
-        }
-        // for (int j = 128-4; j < 128; ++j) {
-        //   printf("%f ", s_mid[i*128+j]);
-        // }
-        printf("\n");
-      }
-      printf("=========\n");
-      for (int i = 0; i < 4; ++i) {
-        for (int j = 0; j < 128; ++j) {
-          printf("%f ", s_b2[s_buf_curr_id * SPLITK2 * BN + i*128+j]);
-        }
-        // for (int j = 128-4; j < 128; ++j) {
-        //   printf("%f ", s_b2[i*128+j]);
-        // }
-        printf("\n");
-      }
-      printf("=========\n");
-    }
-
-    __syncthreads();
-
     // ldg
     r_load_b = *(float4*)(b2 + bk * SPLITK2 * N + (tid >> 5) * N + bx * BN + (tid & 31) * 4);
     // *(float4*)(s_b2 + (s_buf_curr_id ^ 1) * SPLITK2 * BN + (tid >> 5) * BN + (tid & 31) * 4) = r_load_b;
@@ -263,7 +207,6 @@ __global__ void __launch_bounds__(256) sgemm_b2b_kernel(float* __restrict__ a, f
 
     // sts (do sts after mma to hide latency of ldg)
     if (tx / 2 == bk % 8) {
-      // if (bx == 0 && by == 0 && ty == 0 && bk == 9) printf("%d %d\n", bk, tx);
       #pragma unroll
       for (int i = 0; i < 2; ++i) {
         #pragma unroll
@@ -294,15 +237,6 @@ __global__ void __launch_bounds__(256) sgemm_b2b_kernel(float* __restrict__ a, f
       for (int n = 0; n < TN; ++n) {
         *(float*)(r_c + m * TN + n) += (*(float*)(r_a + m)) * (*(float*)(r_b + n));
       }
-    }
-  }
-
-  if (bx == 0 && by == 0 && tx == 0 && ty == 0) {
-    for (int i = 0; i < 4; ++i) {
-      for (int j = 0; j < 4; ++j) {
-        printf("%f ", r_c[i*8+j]);
-      }
-      printf("\n");
     }
   }
 
@@ -347,7 +281,9 @@ void sgemm_b2b(float* __restrict__ a, float* __restrict__ b1, float* __restrict_
 
   IF_STAT;
   ELIF_STAT(1024, 128, 128, 128);
+  ELIF_STAT(1024, 1024, 128, 128);
   ELIF_STAT(1024, 1024, 128, 1024);
+  ELIF_STAT(640000, 128, 128, 128);
   ELSE_STAT;
 
   #undef IF_STAT

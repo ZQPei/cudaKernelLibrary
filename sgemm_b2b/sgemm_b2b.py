@@ -36,9 +36,11 @@ def test_sgemm_b2b(M, K1, K2, N):
     w2.tofile(f"./data/w2_{M}_{K1}_{K2}_{N}.bin")
     mid.tofile(f"./data/mid_ref_{M}_{K1}_{K2}_{N}.bin")
     out.tofile(f"./data/out_ref_{M}_{K1}_{K2}_{N}.bin")
-    import ipdb; ipdb.set_trace()
+    # import ipdb; ipdb.set_trace()
 
 
 if __name__ == "__main__":
     test_sgemm_b2b(1024, 128, 128, 128)
+    test_sgemm_b2b(1024, 1024, 128, 128)
     test_sgemm_b2b(1024, 1024, 128, 1024)
+    test_sgemm_b2b(640000, 128, 128, 128)

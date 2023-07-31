@@ -90,14 +90,14 @@ int main(int argc, char **argv) {
     compareValue(out.h_ptr, outRef.h_ptr, out.size, 1e-2, true);
   }
 
-  return 0;
+  // return 0;
 
   // time profile
   if (FLAGS_doProfile) {
     if (FLAGS_verbose) std::cout << "test performance ..." << std::endl;
     cudaStreamSynchronize(stream);
     cuAssert(cudaGetLastError());
-    float ms = testPerf(test_func, stream);
+    float ms = testPerf(test_func, stream, FLAGS_runNum);
     std::cout << "PERF: " << ms << " ms" << std::endl;
     float flops = 2 * long(M) * K1 * K2 + 2 * long(M) * K2 * N;
     float GFLOPS = float(flops) / 1024/1024/1024/(ms/1e3);
