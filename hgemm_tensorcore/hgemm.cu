@@ -1,5 +1,6 @@
 #include <cuda.h>
 #include <cublas_v2.h>
+#include <mma.h>
 #include <iostream>
 
 template<int X>
@@ -30,14 +31,61 @@ __host__ __device__ __inline__ int constexpr getBits() {
 // C: row_major [M, N]
 template<int M, int N, int K,int BM, int BN, int BK>
 __global__ void hgemm_tensorcore_kernel(half* __restrict__ A, half* __restrict__ B, half* __restrict__ C) {
+  int constexpr blockSz = 256;
 
+  int constexpr WM = 64;
+  int constexpr WN = 64;
+  int constexpr WK = 32;
+  static_assert((WM<=BM) && (WN<=BN) && (WK<=BK), "shape error");
+
+  // use memory padding here to avoid shared memory bank conflict
+  // select `padding=8` because ldm of load_matrix_sync must be a multiple of 8 for __half element type or multiple of 4 for float element type
+  int constexpr PAD_A = 8;
+  int constexpr PAD_B = 8;
+  __shared__ half s_a[BM][(BK+PAD_A)];
+  __shared__ half s_b[BK][(BN+PAD_B)];
+
+  wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> frag_a[BM/WM][BK/WK];
+  wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> frag_b[BK/WK][BN/WN];
+  wmma::fragment<wmma::accumulator, 16, 16, 16, half> frag_c[BM/WM][BN/WN];
+
+  // initialize output to zero
+  #pragma unroll
+  for (int i = 0; i < BM/WM; ++i) {
+    #pragma unroll
+    for (int j = 0; j < BN/WN; ++j) {
+      wmma::fill_fragment(frag_c[i][j], 0.0);
+    }
+  }
+
+  // ldg, sts, mma
+  #pragma unroll
+  for (int k = 0; k < K/BK; ++k) {
+    // ldg sts
+
+    __syncthreads();
+    // load matrix
+    // wmma::load_matrix_sync
+
+    // mma
+    // wmma::mma_sync
+  }
+
+  // stg
+  #pragma unroll
+  for (int i = 0; i < BM/WM; ++i) {
+    #pragma unroll
+    for (int j = 0; j < BN/WN; ++j) {
+      wmma::store_matrix_sync(C, frag_c[i][j], 16, wmma::mem_row_major);
+    }
+  }
 }
 
 template<int M, int N, int K>
 void _launch_hgemm_tensorcore_kernel(half* __restrict__ A, half* __restrict__ B, half* __restrict__ C, cudaStream_t stream) {
   int constexpr BM = 128;
-  int constexpr BK = 32;
   int constexpr BN = 256;
+  int constexpr BK = 32;
   static_assert((M&(BM-1))==0 && (N&(BN-1))==0 && (K&(BK-1))==0, "M, N, K shape mismatch");
 
   int constexpr blockSz = 256;
