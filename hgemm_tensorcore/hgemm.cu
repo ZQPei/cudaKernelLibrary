@@ -3,6 +3,8 @@
 #include <mma.h>
 #include <iostream>
 
+using namespace nvcuda;
+
 template<int X>
 __host__ __device__ __inline__ int constexpr getBits() {
   switch (X) {
@@ -45,38 +47,73 @@ __global__ void hgemm_tensorcore_kernel(half* __restrict__ A, half* __restrict__
   __shared__ half s_a[BM][(BK+PAD_A)];
   __shared__ half s_b[BK][(BN+PAD_B)];
 
-  wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> frag_a[BM/WM][BK/WK];
-  wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> frag_b[BK/WK][BN/WN];
-  wmma::fragment<wmma::accumulator, 16, 16, 16, half> frag_c[BM/WM][BN/WN];
+  int const tid = threadIdx.x;
+  int const wid = tid >> 5;
+  // int const laneid = tid & 31;
+
+  wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> frag_a[WM/16][WK/16];
+  wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> frag_b[WK/16][WN/16];
+  wmma::fragment<wmma::accumulator, 16, 16, 16, half> frag_c[WM/16][WN/16];
 
   // initialize output to zero
   #pragma unroll
-  for (int i = 0; i < BM/WM; ++i) {
+  for (int m = 0; m < WM/16; ++m) {
     #pragma unroll
-    for (int j = 0; j < BN/WN; ++j) {
-      wmma::fill_fragment(frag_c[i][j], 0.0);
+    for (int n = 0; n < WN/16; ++n) {
+      wmma::fill_fragment(frag_c[m][n], (half)0.0);
     }
   }
 
   // ldg, sts, mma
   #pragma unroll
-  for (int k = 0; k < K/BK; ++k) {
+  for (int bk = 0; bk < K/BK; ++bk) {
     // ldg sts
+    *(float4*)&s_a[0 * 64 + (tid>>2)][(tid&3) * 8] = *(float4*)(A + by * BM * K + (0 * 64 + (tid>>2)) * K + bk * BK + (tid&3) * 8);
+    *(float4*)&s_a[1 * 64 + (tid>>2)][(tid&3) * 8] = *(float4*)(A + by * BM * K + (1 * 64 + (tid>>2)) * K + bk * BK + (tid&3) * 8);
+    *(float4*)&s_b[(tid>>3)][0 * 8 * 8 + (tid&7) * 8] = *(float4*)(B + bk * BK * N + (tid>>3) * N + bx * BN + (0 * 8 * 8 + (tid&7) * 8));
+    *(float4*)&s_b[(tid>>3)][1 * 8 * 8 + (tid&7) * 8] = *(float4*)(B + bk * BK * N + (tid>>3) * N + bx * BN + (1 * 8 * 8 + (tid&7) * 8));
+    *(float4*)&s_b[(tid>>3)][2 * 8 * 8 + (tid&7) * 8] = *(float4*)(B + bk * BK * N + (tid>>3) * N + bx * BN + (2 * 8 * 8 + (tid&7) * 8));
+    *(float4*)&s_b[(tid>>3)][3 * 8 * 8 + (tid&7) * 8] = *(float4*)(B + bk * BK * N + (tid>>3) * N + bx * BN + (3 * 8 * 8 + (tid&7) * 8));
 
     __syncthreads();
+
     // load matrix
-    // wmma::load_matrix_sync
+    #pragma unroll
+    for (int m = 0; m < WM/16; ++m) {
+      #pragma unroll
+      for (int k = 0; k < WK/16; ++k) {
+        wmma::load_matrix_sync(frag_a[m][k], &s_a[(wid>>2) * 64 + m * 16][k * 16], BK+PAD_A);
+      }
+    }
+    #pragma unroll
+    for (int k = 0; k < WM/16; ++k) {
+      #pragma unroll
+      for (int n = 0; n < WN/16; ++n) {
+        wmma::load_matrix_sync(frag_b[k][n], &s_b[k * 16][(wid&3) * 64 + n * 16], BN+PAD_B);
+      }
+    }
 
     // mma
-    // wmma::mma_sync
+    #pragma unroll
+    for (int m = 0; m < WM/16; ++m) {
+      #pragma unroll
+      for (int n = 0; n < WN/16; ++n) {
+        #pragma unroll
+        for (int k = 0; k < WK/16; ++k) {
+          wmma::mma_sync(frag_c[m][n], frag_a[m][k], frag_b[k][n], frag_c[m][n]);
+        }
+      }
+    }
+
+    __syncthreads();
   }
 
   // stg
   #pragma unroll
-  for (int i = 0; i < BM/WM; ++i) {
+  for (int m = 0; m < WM/16; ++m) {
     #pragma unroll
-    for (int j = 0; j < BN/WN; ++j) {
-      wmma::store_matrix_sync(C, frag_c[i][j], 16, wmma::mem_row_major);
+    for (int n = 0; n < WN/16; ++n) {
+      wmma::store_matrix_sync(C + by * BM * N + (wid>>2) * WM * N + m * 16 * N + bx * BN + (wid&3) * WN + n * 16, frag_c[m][n], N, wmma::mem_row_major);
     }
   }
 }
@@ -119,16 +156,12 @@ void _launch_hgemm_cudnn_kernel(half* __restrict__ a, half* __restrict__ b, half
 ////////////////////////////////////////////////////////////////////////
 void hgemm_cuda(half* __restrict__ A, half* __restrict__ B, half* __restrict__ AT, half* __restrict__ BT, half* __restrict__ C, int M, int N, int K, cudaStream_t stream) {
   #define IF_STAT if (false)
-  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_hgemm_tensorcore_kernel<(m), (n), (k)>(A, B, C, stream)
-  #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_hgemm_cudnn_kernel<(m), (n), (k)>(A, B, C, stream)
+  #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_hgemm_tensorcore_kernel<(m), (n), (k)>(A, B, C, stream)
+  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_hgemm_cudnn_kernel<(m), (n), (k)>(A, B, C, stream)
   #define ELSE_STAT else { std::cout << "NOT_IMPLEMENTED" << std::endl; __builtin_trap(); }
 
   IF_STAT;
-  ELIF_STAT(32, 32, 32);
-  ELIF_STAT(128, 128, 128);
   ELIF_STAT(1024, 1024, 1024);
-  ELIF_STAT(640000, 128, 32);
-  ELIF_STAT(640000, 32, 16);
   ELSE_STAT;
 
   #undef IF_STAT
