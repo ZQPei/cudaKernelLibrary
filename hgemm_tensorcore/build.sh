@@ -24,8 +24,8 @@ elif [[ $# == 0 ]]; then
     ${cmd} hgemm.cu main.cc -o ${target_dir}/${target_file}
     # nvprof \
     # nsys profile --trace=cuda,nvtx --backtrace=none --sample=none -o "/home/administrator/workspace/tmp/`date +%F-%T`.qdrep" \
-    run_cmd="${target_dir}/${target_file} -M=1024 -N=1024 -K=1024 -verbose=true -doProfile=true -doRefCheck=true -runNum=1000"
-    # run_cmd="${target_dir}/${target_file} -M=640000 -N=128 -K=32 -verbose=true -doProfile=true -doRefCheck=true -runNum=1000"
+    run_cmd="${target_dir}/${target_file} -M=1024 -N=1024 -K=1024 -verbose=true -doProfile=true -doRefCheck=true -runNum=10000"
+    # run_cmd="${target_dir}/${target_file} -M=640000 -N=128 -K=32 -verbose=true -doProfile=true -doRefCheck=true -runNum=10000"
     echo $run_cmd
     $run_cmd
 fi
