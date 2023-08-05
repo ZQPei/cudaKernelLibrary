@@ -89,7 +89,7 @@ int main(int argc, char **argv) {
     if (FLAGS_verbose) std::cout << "test performance ..." << std::endl;
     cudaStreamSynchronize(stream);
     cuAssert(cudaGetLastError());
-    float ms = testPerf(test_func, stream);
+    float ms = testPerf(test_func, stream, FLAGS_runNum);
     std::cout << "PERF: " << ms << " ms" << std::endl;
     float flops = 2 * long(M) * N * K;
     float GFLOPS = float(flops) / 1024/1024/1024/(ms/1e3);
