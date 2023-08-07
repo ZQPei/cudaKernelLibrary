@@ -713,6 +713,8 @@ __global__ void hgemm_tensorcore_128_doublebuffer_ldgsts_v3_kernel(half* __restr
   int s_a_base_addr = __cvta_generic_to_shared(s_a);
   int s_b_base_addr = __cvta_generic_to_shared(s_b);
 
+  #undef bx
+  int const bx = blockIdx.z * gridDim.x + blockIdx.x;
 
   int const tid = threadIdx.x;
   int const wid = tid >> 5;
@@ -735,7 +737,7 @@ __global__ void hgemm_tensorcore_128_doublebuffer_ldgsts_v3_kernel(half* __restr
 
   {
     int bk = 0;
-    // ldg sts
+    // ldgsts
     asm ("cp.async.ca.shared.global [%0], [%1], %2;\n"::
          "r"((int)(s_a_base_addr + (curr_smem_idx * s_a_size + (0 * 32 + (tid>>2)) * (BK + PAD_A) + (tid&3) * 8) * sizeof(half))),
          "l"(A + by * BM * K + (0 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8),
@@ -769,7 +771,7 @@ __global__ void hgemm_tensorcore_128_doublebuffer_ldgsts_v3_kernel(half* __restr
          "l"(B + bk * BK * N + 1 * 16 * N + (tid>>3) * N + bx * BN + (1 * 8 * 8 + (tid&7) * 8)),
          "n"(16));
 
-
+    // ldg
     // *(float4*)(s_a + curr_smem_idx * s_a_size + (0 * 32 + (tid>>2)) * (BK + PAD_A) + (tid&3) * 8) = *(float4*)(A + by * BM * K + (0 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8);
     // *(float4*)(s_a + curr_smem_idx * s_a_size + (1 * 32 + (tid>>2)) * (BK + PAD_A) + (tid&3) * 8) = *(float4*)(A + by * BM * K + (1 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8);
     // *(float4*)(s_a + curr_smem_idx * s_a_size + (2 * 32 + (tid>>2)) * (BK + PAD_A) + (tid&3) * 8) = *(float4*)(A + by * BM * K + (2 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8);
@@ -788,7 +790,7 @@ __global__ void hgemm_tensorcore_128_doublebuffer_ldgsts_v3_kernel(half* __restr
   // ldg, sts, mma
   #pragma unroll
   for (int bk = 1; bk < K/BK; ++bk) {
-    // ldg
+    // ldgsts
     asm ("cp.async.ca.shared.global [%0], [%1], %2;\n"::
          "r"((int)(s_a_base_addr + ((curr_smem_idx ^ 1) * s_a_size + (0 * 32 + (tid>>2)) * (BK + PAD_A) + (tid&3) * 8) * sizeof(half))),
          "l"(A + by * BM * K + (0 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8),
@@ -821,6 +823,7 @@ __global__ void hgemm_tensorcore_128_doublebuffer_ldgsts_v3_kernel(half* __restr
          "r"((int)(s_b_base_addr + ((curr_smem_idx ^ 1) * s_b_size + (1 * 16 + (tid>>3)) * (BN + PAD_B) + 1 * 8 * 8 + (tid&7) * 8) * sizeof(half))),
          "l"(B + bk * BK * N + 1 * 16 * N + (tid>>3) * N + bx * BN + (1 * 8 * 8 + (tid&7) * 8)),
          "n"(16));
+    // ldg
     // *(float4*)(r_load_a + 0 * 8) = *(float4*)(A + by * BM * K + (0 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8);
     // *(float4*)(r_load_a + 1 * 8) = *(float4*)(A + by * BM * K + (1 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8);
     // *(float4*)(r_load_a + 2 * 8) = *(float4*)(A + by * BM * K + (2 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8);
@@ -925,12 +928,266 @@ void _launch_hgemm_tensorcore_128_doublebuffer_ldgsts_v3_kernel(half* __restrict
   static_assert((M&(BM-1))==0 && (N&(BN-1))==0 && (K&(BK-1))==0, "M, N, K shape mismatch");
 
   int constexpr blockSz = 128;
-  dim3 const gridSz = {N/BN, M/BM};
+  int constexpr NSPLIT = 4;
+  dim3 const gridSz = {N/BN/NSPLIT, M/BM, NSPLIT};
   cudaFuncSetAttribute(hgemm_tensorcore_128_doublebuffer_ldgsts_v3_kernel<M,N,K,BM,BN,BK>, cudaFuncAttributeMaxDynamicSharedMemorySize, 98304);  // default 48KB -> 96KB
   int constexpr PAD_A = 8;
   int constexpr PAD_B = 8;
   int constexpr smemSz = (2 * BM * (BK+PAD_A) + 2 * BK * (BN+PAD_B)) * sizeof(half);
   hgemm_tensorcore_128_doublebuffer_ldgsts_v3_kernel<M,N,K,BM,BN,BK><<<gridSz, blockSz, smemSz, stream>>>(A, B, C);
+}
+
+
+////////////////////////////////////////////////////////////////////////
+// 7. hgemm tensorcore 128x128 double buffer ldgsts nsplit
+// (Improve the hit rate of L2 Cache. It's proven useful on JETSON Orin, but not ideal on RTX 30 series)
+// A: row_major [M, K]
+// B: row_major [K, N]
+// C: row_major [M, N]
+template<int M, int N, int K,int BM, int BN, int BK>
+__global__ void hgemm_tensorcore_128_doublebuffer_ldgsts_nsplit_v4_kernel(half* __restrict__ A, half* __restrict__ B, half* __restrict__ C) {
+  int constexpr blockSz = 128; (void)blockSz;
+
+  int constexpr WM = 64;
+  int constexpr WN = 64;
+  int constexpr WK = 32;
+  static_assert((WM<=BM) && (WN<=BN) && (WK<=BK), "shape error");
+
+  // use memory padding here to avoid shared memory bank conflict
+  // select `padding=8` because ldm of load_matrix_sync must be a multiple of 8 for __half element type or multiple of 4 for float element type
+  int constexpr PAD_A = 8;
+  int constexpr PAD_B = 8;
+  int constexpr s_a_size = BM * (BK+PAD_A);
+  int constexpr s_b_size = BK * (BN+PAD_B);
+  extern __shared__ half s_buf[];
+  half* s_a = s_buf; // [2][BM][(BK+PAD_A)]
+  half* s_b = s_buf + 2 * s_a_size;  // [2][BK][(BN+PAD_B)]
+
+  int s_a_base_addr = __cvta_generic_to_shared(s_a);
+  int s_b_base_addr = __cvta_generic_to_shared(s_b);
+
+  #undef bx
+  int const bx = blockIdx.z * gridDim.x + blockIdx.x;
+
+  int const tid = threadIdx.x;
+  int const wid = tid >> 5;
+  // int const laneid = tid & 31;
+
+  wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> frag_a[WM/16][WK/16];
+  wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> frag_b[WK/16][WN/16];
+  wmma::fragment<wmma::accumulator, 16, 16, 16, half> frag_c[WM/16][WN/16];
+
+  // initialize output to zero
+  #pragma unroll
+  for (int m = 0; m < WM/16; ++m) {
+    #pragma unroll
+    for (int n = 0; n < WN/16; ++n) {
+      wmma::fill_fragment(frag_c[m][n], (half)0.0);
+    }
+  }
+
+  int curr_smem_idx = 0;
+
+  {
+    int bk = 0;
+    // ldgsts
+    asm ("cp.async.ca.shared.global [%0], [%1], %2;\n"::
+         "r"((int)(s_a_base_addr + (curr_smem_idx * s_a_size + (0 * 32 + (tid>>2)) * (BK + PAD_A) + (tid&3) * 8) * sizeof(half))),
+         "l"(A + by * BM * K + (0 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8),
+         "n"(16));
+    asm ("cp.async.ca.shared.global [%0], [%1], %2;\n"::
+         "r"((int)(s_a_base_addr + (curr_smem_idx * s_a_size + (1 * 32 + (tid>>2)) * (BK + PAD_A) + (tid&3) * 8) * sizeof(half))),
+         "l"(A + by * BM * K + (1 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8),
+         "n"(16));
+    asm ("cp.async.ca.shared.global [%0], [%1], %2;\n"::
+         "r"((int)(s_a_base_addr + (curr_smem_idx * s_a_size + (2 * 32 + (tid>>2)) * (BK + PAD_A) + (tid&3) * 8) * sizeof(half))),
+         "l"(A + by * BM * K + (2 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8),
+         "n"(16));
+    asm ("cp.async.ca.shared.global [%0], [%1], %2;\n"::
+         "r"((int)(s_a_base_addr + (curr_smem_idx * s_a_size + (3 * 32 + (tid>>2)) * (BK + PAD_A) + (tid&3) * 8) * sizeof(half))),
+         "l"(A + by * BM * K + (3 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8),
+         "n"(16));
+    asm ("cp.async.ca.shared.global [%0], [%1], %2;\n"::
+         "r"((int)(s_b_base_addr + (curr_smem_idx * s_b_size + (0 * 16 + (tid>>3)) * (BN + PAD_B) + 0 * 8 * 8 + (tid&7) * 8) * sizeof(half))),
+         "l"(B + bk * BK * N + 0 * 16 * N + (tid>>3) * N + bx * BN + (0 * 8 * 8 + (tid&7) * 8)),
+         "n"(16));
+    asm ("cp.async.ca.shared.global [%0], [%1], %2;\n"::
+         "r"((int)(s_b_base_addr + (curr_smem_idx * s_b_size + (0 * 16 + (tid>>3)) * (BN + PAD_B) + 1 * 8 * 8 + (tid&7) * 8) * sizeof(half))),
+         "l"(B + bk * BK * N + 0 * 16 * N + (tid>>3) * N + bx * BN + (1 * 8 * 8 + (tid&7) * 8)),
+         "n"(16));
+    asm ("cp.async.ca.shared.global [%0], [%1], %2;\n"::
+         "r"((int)(s_b_base_addr + (curr_smem_idx * s_b_size + (1 * 16 + (tid>>3)) * (BN + PAD_B) + 0 * 8 * 8 + (tid&7) * 8) * sizeof(half))),
+         "l"(B + bk * BK * N + 1 * 16 * N + (tid>>3) * N + bx * BN + (0 * 8 * 8 + (tid&7) * 8)),
+         "n"(16));
+    asm ("cp.async.ca.shared.global [%0], [%1], %2;\n"::
+         "r"((int)(s_b_base_addr + (curr_smem_idx * s_b_size + (1 * 16 + (tid>>3)) * (BN + PAD_B) + 1 * 8 * 8 + (tid&7) * 8) * sizeof(half))),
+         "l"(B + bk * BK * N + 1 * 16 * N + (tid>>3) * N + bx * BN + (1 * 8 * 8 + (tid&7) * 8)),
+         "n"(16));
+
+    // ldg
+    // *(float4*)(s_a + curr_smem_idx * s_a_size + (0 * 32 + (tid>>2)) * (BK + PAD_A) + (tid&3) * 8) = *(float4*)(A + by * BM * K + (0 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8);
+    // *(float4*)(s_a + curr_smem_idx * s_a_size + (1 * 32 + (tid>>2)) * (BK + PAD_A) + (tid&3) * 8) = *(float4*)(A + by * BM * K + (1 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8);
+    // *(float4*)(s_a + curr_smem_idx * s_a_size + (2 * 32 + (tid>>2)) * (BK + PAD_A) + (tid&3) * 8) = *(float4*)(A + by * BM * K + (2 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8);
+    // *(float4*)(s_a + curr_smem_idx * s_a_size + (3 * 32 + (tid>>2)) * (BK + PAD_A) + (tid&3) * 8) = *(float4*)(A + by * BM * K + (3 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8);
+    // *(float4*)(s_b + curr_smem_idx * s_b_size + (0 * 16 + (tid>>3)) * (BN + PAD_B) + 0 * 8 * 8 + (tid&7) * 8) = *(float4*)(B + bk * BK * N + 0 * 16 * N + (tid>>3) * N + bx * BN + (0 * 8 * 8 + (tid&7) * 8));
+    // *(float4*)(s_b + curr_smem_idx * s_b_size + (0 * 16 + (tid>>3)) * (BN + PAD_B) + 1 * 8 * 8 + (tid&7) * 8) = *(float4*)(B + bk * BK * N + 0 * 16 * N + (tid>>3) * N + bx * BN + (1 * 8 * 8 + (tid&7) * 8));
+    // *(float4*)(s_b + curr_smem_idx * s_b_size + (1 * 16 + (tid>>3)) * (BN + PAD_B) + 0 * 8 * 8 + (tid&7) * 8) = *(float4*)(B + bk * BK * N + 1 * 16 * N + (tid>>3) * N + bx * BN + (0 * 8 * 8 + (tid&7) * 8));
+    // *(float4*)(s_b + curr_smem_idx * s_b_size + (1 * 16 + (tid>>3)) * (BN + PAD_B) + 1 * 8 * 8 + (tid&7) * 8) = *(float4*)(B + bk * BK * N + 1 * 16 * N + (tid>>3) * N + bx * BN + (1 * 8 * 8 + (tid&7) * 8));
+
+    asm ("cp.async.commit_group;\n" ::);
+    asm ("cp.async.wait_group 0;\n" ::);
+
+    __syncthreads();
+  }
+
+  // ldg, sts, mma
+  #pragma unroll
+  for (int bk = 1; bk < K/BK; ++bk) {
+    // ldgsts
+    asm ("cp.async.ca.shared.global [%0], [%1], %2;\n"::
+         "r"((int)(s_a_base_addr + ((curr_smem_idx ^ 1) * s_a_size + (0 * 32 + (tid>>2)) * (BK + PAD_A) + (tid&3) * 8) * sizeof(half))),
+         "l"(A + by * BM * K + (0 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8),
+         "n"(16));
+    asm ("cp.async.ca.shared.global [%0], [%1], %2;\n"::
+         "r"((int)(s_a_base_addr + ((curr_smem_idx ^ 1) * s_a_size + (1 * 32 + (tid>>2)) * (BK + PAD_A) + (tid&3) * 8) * sizeof(half))),
+         "l"(A + by * BM * K + (1 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8),
+         "n"(16));
+    asm ("cp.async.ca.shared.global [%0], [%1], %2;\n"::
+         "r"((int)(s_a_base_addr + ((curr_smem_idx ^ 1) * s_a_size + (2 * 32 + (tid>>2)) * (BK + PAD_A) + (tid&3) * 8) * sizeof(half))),
+         "l"(A + by * BM * K + (2 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8),
+         "n"(16));
+    asm ("cp.async.ca.shared.global [%0], [%1], %2;\n"::
+         "r"((int)(s_a_base_addr + ((curr_smem_idx ^ 1) * s_a_size + (3 * 32 + (tid>>2)) * (BK + PAD_A) + (tid&3) * 8) * sizeof(half))),
+         "l"(A + by * BM * K + (3 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8),
+         "n"(16));
+    asm ("cp.async.ca.shared.global [%0], [%1], %2;\n"::
+         "r"((int)(s_b_base_addr + ((curr_smem_idx ^ 1) * s_b_size + (0 * 16 + (tid>>3)) * (BN + PAD_B) + 0 * 8 * 8 + (tid&7) * 8) * sizeof(half))),
+         "l"(B + bk * BK * N + 0 * 16 * N + (tid>>3) * N + bx * BN + (0 * 8 * 8 + (tid&7) * 8)),
+         "n"(16));
+    asm ("cp.async.ca.shared.global [%0], [%1], %2;\n"::
+         "r"((int)(s_b_base_addr + ((curr_smem_idx ^ 1) * s_b_size + (0 * 16 + (tid>>3)) * (BN + PAD_B) + 1 * 8 * 8 + (tid&7) * 8) * sizeof(half))),
+         "l"(B + bk * BK * N + 0 * 16 * N + (tid>>3) * N + bx * BN + (1 * 8 * 8 + (tid&7) * 8)),
+         "n"(16));
+    asm ("cp.async.ca.shared.global [%0], [%1], %2;\n"::
+         "r"((int)(s_b_base_addr + ((curr_smem_idx ^ 1) * s_b_size + (1 * 16 + (tid>>3)) * (BN + PAD_B) + 0 * 8 * 8 + (tid&7) * 8) * sizeof(half))),
+         "l"(B + bk * BK * N + 1 * 16 * N + (tid>>3) * N + bx * BN + (0 * 8 * 8 + (tid&7) * 8)),
+         "n"(16));
+    asm ("cp.async.ca.shared.global [%0], [%1], %2;\n"::
+         "r"((int)(s_b_base_addr + ((curr_smem_idx ^ 1) * s_b_size + (1 * 16 + (tid>>3)) * (BN + PAD_B) + 1 * 8 * 8 + (tid&7) * 8) * sizeof(half))),
+         "l"(B + bk * BK * N + 1 * 16 * N + (tid>>3) * N + bx * BN + (1 * 8 * 8 + (tid&7) * 8)),
+         "n"(16));
+    // ldg
+    // *(float4*)(r_load_a + 0 * 8) = *(float4*)(A + by * BM * K + (0 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8);
+    // *(float4*)(r_load_a + 1 * 8) = *(float4*)(A + by * BM * K + (1 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8);
+    // *(float4*)(r_load_a + 2 * 8) = *(float4*)(A + by * BM * K + (2 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8);
+    // *(float4*)(r_load_a + 3 * 8) = *(float4*)(A + by * BM * K + (3 * 32 + (tid>>2)) * K + bk * BK + (tid&3) * 8);
+    // *(float4*)(r_load_b + 0 * 8) = *(float4*)(B + bk * BK * N + 0 * 16 * N + (tid>>3) * N + bx * BN + (0 * 8 * 8 + (tid&7) * 8));
+    // *(float4*)(r_load_b + 1 * 8) = *(float4*)(B + bk * BK * N + 0 * 16 * N + (tid>>3) * N + bx * BN + (1 * 8 * 8 + (tid&7) * 8));
+    // *(float4*)(r_load_b + 2 * 8) = *(float4*)(B + bk * BK * N + 1 * 16 * N + (tid>>3) * N + bx * BN + (0 * 8 * 8 + (tid&7) * 8));
+    // *(float4*)(r_load_b + 3 * 8) = *(float4*)(B + bk * BK * N + 1 * 16 * N + (tid>>3) * N + bx * BN + (1 * 8 * 8 + (tid&7) * 8));
+
+    // load matrix
+    #pragma unroll
+    for (int m = 0; m < WM/16; ++m) {
+      #pragma unroll
+      for (int k = 0; k < WK/16; ++k) {
+        wmma::load_matrix_sync(frag_a[m][k], s_a + curr_smem_idx * s_a_size + ((wid>>1) * 64 + m * 16) * (BK + PAD_A) + k * 16, BK+PAD_A);
+      }
+    }
+
+    #pragma unroll
+    for (int k = 0; k < WM/16; ++k) {
+      #pragma unroll
+      for (int n = 0; n < WN/16; ++n) {
+        wmma::load_matrix_sync(frag_b[k][n], s_b + curr_smem_idx * s_b_size + k * 16 * (BN + PAD_B) + (wid&1) * 64 + n * 16, BN+PAD_B);
+      }
+    }
+
+    // sts
+    // *(float4*)(s_a + (curr_smem_idx ^ 1) * s_a_size + (0 * 32 + (tid>>2)) * (BK + PAD_A) + (tid&3) * 8) = *(float4*)(r_load_a + 0 * 8);
+    // *(float4*)(s_a + (curr_smem_idx ^ 1) * s_a_size + (1 * 32 + (tid>>2)) * (BK + PAD_A) + (tid&3) * 8) = *(float4*)(r_load_a + 1 * 8);
+    // *(float4*)(s_a + (curr_smem_idx ^ 1) * s_a_size + (2 * 32 + (tid>>2)) * (BK + PAD_A) + (tid&3) * 8) = *(float4*)(r_load_a + 2 * 8);
+    // *(float4*)(s_a + (curr_smem_idx ^ 1) * s_a_size + (3 * 32 + (tid>>2)) * (BK + PAD_A) + (tid&3) * 8) = *(float4*)(r_load_a + 3 * 8);
+    // *(float4*)(s_b + (curr_smem_idx ^ 1) * s_b_size + (0 * 16 + (tid>>3)) * (BN + PAD_B) + 0 * 8 * 8 + (tid&7) * 8) = *(float4*)(r_load_b + 0 * 8);
+    // *(float4*)(s_b + (curr_smem_idx ^ 1) * s_b_size + (0 * 16 + (tid>>3)) * (BN + PAD_B) + 1 * 8 * 8 + (tid&7) * 8) = *(float4*)(r_load_b + 1 * 8);
+    // *(float4*)(s_b + (curr_smem_idx ^ 1) * s_b_size + (1 * 16 + (tid>>3)) * (BN + PAD_B) + 0 * 8 * 8 + (tid&7) * 8) = *(float4*)(r_load_b + 2 * 8);
+    // *(float4*)(s_b + (curr_smem_idx ^ 1) * s_b_size + (1 * 16 + (tid>>3)) * (BN + PAD_B) + 1 * 8 * 8 + (tid&7) * 8) = *(float4*)(r_load_b + 3 * 8);
+
+    // mma
+    #pragma unroll
+    for (int m = 0; m < WM/16; ++m) {
+      #pragma unroll
+      for (int n = 0; n < WN/16; ++n) {
+        #pragma unroll
+        for (int k = 0; k < WK/16; ++k) {
+          wmma::mma_sync(frag_c[m][n], frag_a[m][k], frag_b[k][n], frag_c[m][n]);
+        }
+      }
+    }
+
+    asm ("cp.async.commit_group;\n" ::);
+    asm ("cp.async.wait_group 0;\n" ::);
+
+    __syncthreads();
+
+    curr_smem_idx ^= 1;
+  }
+
+  {
+    // load matrix
+    #pragma unroll
+    for (int m = 0; m < WM/16; ++m) {
+      #pragma unroll
+      for (int k = 0; k < WK/16; ++k) {
+        wmma::load_matrix_sync(frag_a[m][k], s_a + curr_smem_idx * s_a_size + ((wid>>1) * 64 + m * 16) * (BK + PAD_A) + k * 16, BK+PAD_A);
+      }
+    }
+    #pragma unroll
+    for (int k = 0; k < WM/16; ++k) {
+      #pragma unroll
+      for (int n = 0; n < WN/16; ++n) {
+        wmma::load_matrix_sync(frag_b[k][n], s_b + curr_smem_idx * s_b_size + k * 16 * (BN + PAD_B) + (wid&1) * 64 + n * 16, BN+PAD_B);
+      }
+    }
+
+    // mma
+    #pragma unroll
+    for (int m = 0; m < WM/16; ++m) {
+      #pragma unroll
+      for (int n = 0; n < WN/16; ++n) {
+        #pragma unroll
+        for (int k = 0; k < WK/16; ++k) {
+          wmma::mma_sync(frag_c[m][n], frag_a[m][k], frag_b[k][n], frag_c[m][n]);
+        }
+      }
+    }
+  }
+
+  // stg
+  #pragma unroll
+  for (int m = 0; m < WM/16; ++m) {
+    #pragma unroll
+    for (int n = 0; n < WN/16; ++n) {
+      wmma::store_matrix_sync(C + by * BM * N + (wid>>1) * WM * N + m * 16 * N + bx * BN + (wid&1) * WN + n * 16, frag_c[m][n], N, wmma::mem_row_major);
+    }
+  }
+}
+
+template<int M, int N, int K>
+void _launch_hgemm_tensorcore_128_doublebuffer_ldgsts_nsplit_v4_kernel(half* __restrict__ A, half* __restrict__ B, half* __restrict__ C, cudaStream_t stream) {
+  int constexpr BM = 128;
+  int constexpr BN = 128;
+  int constexpr BK = 32;
+  static_assert((M&(BM-1))==0 && (N&(BN-1))==0 && (K&(BK-1))==0, "M, N, K shape mismatch");
+
+  int constexpr NSPLIT = 4;
+  int constexpr blockSz = 128;
+  dim3 const gridSz = {N/BN/NSPLIT, M/BM, NSPLIT};
+  cudaFuncSetAttribute(hgemm_tensorcore_128_doublebuffer_ldgsts_nsplit_v4_kernel<M,N,K,BM,BN,BK>, cudaFuncAttributeMaxDynamicSharedMemorySize, 98304);  // default 48KB -> 96KB
+  int constexpr PAD_A = 8;
+  int constexpr PAD_B = 8;
+  int constexpr smemSz = (2 * BM * (BK+PAD_A) + 2 * BK * (BN+PAD_B)) * sizeof(half);
+  hgemm_tensorcore_128_doublebuffer_ldgsts_nsplit_v4_kernel<M,N,K,BM,BN,BK><<<gridSz, blockSz, smemSz, stream>>>(A, B, C);
 }
 
 
@@ -964,7 +1221,8 @@ void hgemm_cuda(half* __restrict__ A, half* __restrict__ B, half* __restrict__ A
   // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_hgemm_tensorcore_doublebuffer_v3_kernel<(m), (n), (k)>(A, B, C, stream)
   // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_hgemm_tensorcore_128_v1_kernel<(m), (n), (k)>(A, B, C, stream)
   // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_hgemm_tensorcore_128_doublebuffer_v2_kernel<(m), (n), (k)>(A, B, C, stream)
-  #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_hgemm_tensorcore_128_doublebuffer_ldgsts_v3_kernel<(m), (n), (k)>(A, B, C, stream)
+  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_hgemm_tensorcore_128_doublebuffer_ldgsts_v3_kernel<(m), (n), (k)>(A, B, C, stream)
+  #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_hgemm_tensorcore_128_doublebuffer_ldgsts_nsplit_v4_kernel<(m), (n), (k)>(A, B, C, stream)
   // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_hgemm_cudnn_kernel<(m), (n), (k)>(A, B, C, stream)
   #define ELSE_STAT else { std::cout << "NOT_IMPLEMENTED" << std::endl; __builtin_trap(); }
 
