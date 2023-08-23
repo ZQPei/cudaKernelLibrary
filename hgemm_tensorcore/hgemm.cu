@@ -1492,7 +1492,7 @@ void _launch_hgemm_tensorcore_128x128_multibuf_32x5_ldgsts_v5_kernel(half* __res
 // C: row_major [M, N]
 // cublas
 template<int M, int N, int K>
-void _launch_hgemm_cudnn_kernel(half* __restrict__ a, half* __restrict__ b, half* __restrict__ c, cudaStream_t stream) {
+void _launch_hgemm_cublas_kernel(half* __restrict__ a, half* __restrict__ b, half* __restrict__ c, cudaStream_t stream) {
   static cublasHandle_t cublas_handle = nullptr;
   if (cublas_handle == nullptr) {
     cublasCreate(&cublas_handle);
@@ -1515,10 +1515,10 @@ void hgemm_cuda(half* __restrict__ A, half* __restrict__ B, half* __restrict__ A
   // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_hgemm_tensorcore_doublebuffer_v3_kernel<(m), (n), (k)>(A, B, C, stream)
   // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_hgemm_tensorcore_128x128_v1_kernel<(m), (n), (k)>(A, B, C, stream)
   // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_hgemm_tensorcore_128x128_doublebuffer_v2_kernel<(m), (n), (k)>(A, B, C, stream)
-  #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_hgemm_tensorcore_128x128_doublebuffer_ldgsts_v3_kernel<(m), (n), (k)>(A, B, C, stream)
-  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_hgemm_tensorcore_128x128_doublebuffer_ldgsts_nsplit_v4_kernel<(m), (n), (k)>(A, B, C, stream)
+  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_hgemm_tensorcore_128x128_doublebuffer_ldgsts_v3_kernel<(m), (n), (k)>(A, B, C, stream)
+  #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_hgemm_tensorcore_128x128_doublebuffer_ldgsts_nsplit_v4_kernel<(m), (n), (k)>(A, B, C, stream)
   // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_hgemm_tensorcore_128x128_multibuf_32x5_ldgsts_v5_kernel<(m), (n), (k)>(A, B, C, stream)
-  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_hgemm_cudnn_kernel<(m), (n), (k)>(A, B, C, stream)
+  // #define ELIF_STAT(m, n, k) else if ((m) == M && (n) == N && (k) == K) _launch_hgemm_cublas_kernel<(m), (n), (k)>(A, B, C, stream)
   #define ELSE_STAT else { std::cout << "NOT_IMPLEMENTED" << std::endl; __builtin_trap(); }
 
   IF_STAT;
